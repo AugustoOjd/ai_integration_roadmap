@@ -22,9 +22,9 @@ Crear API simple de notas (create, read, update, delete)
 
 ```bash
 mkdir mini-project-1 && cd mini-project-1
-poetry init -n --name mini-1
+uv init --name mini-1
 
-poetry add \
+uv add \
   fastapi==0.109.0 \
   uvicorn[standard]==0.27.0 \
   sqlalchemy[asyncio]==2.0.25 \
@@ -249,7 +249,7 @@ async def health():
 docker-compose up -d
 
 # Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 
 # Test with curl
 curl -X POST http://localhost:8000/notes/ \
@@ -305,7 +305,7 @@ Simple CRUD API usando FastAPI y PostgreSQL.
 ## Run
 ```bash
 docker-compose up
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
 ```
 
@@ -323,9 +323,9 @@ Tomar Mini 1 y agregar Redis caching para GET requests
 
 ### Changes Only
 
-**Agrega a poetry:**
+**Agrega con uv:**
 ```bash
-poetry add redis==5.0.1
+uv add redis==5.0.1
 ```
 
 **Nuevo archivo: app/services/cache.py:**
@@ -520,9 +520,9 @@ Crear endpoint que genere embeddings para texto
 
 ### Código
 
-**Agrega a poetry:**
+**Agrega con uv:**
 ```bash
-poetry add anthropic==0.20.0
+uv add anthropic==0.20.0
 ```
 
 **.env:**
@@ -707,9 +707,9 @@ Almacenar embeddings en PostgreSQL + buscar similares
 
 ### Setup
 
-**Agrega a poetry:**
+**Agrega con uv:**
 ```bash
-poetry add pgvector==0.2.1
+uv add pgvector==0.2.1
 ```
 
 **Update docker-compose.yml:**
@@ -905,9 +905,9 @@ Procesar documentos PDF y preparar para embedding
 
 ### Código
 
-**Agrega a poetry:**
+**Agrega con uv:**
 ```bash
-poetry add pypdf==4.0.1 python-multipart==0.0.6
+uv add pypdf==4.0.1 python-multipart==0.0.6
 ```
 
 **Nueva tabla para chunks:**
@@ -1332,9 +1332,9 @@ Crear API que encole tareas simples
 
 ```bash
 mkdir mini-project-6 && cd mini-project-6
-poetry init -n --name mini-6
+uv init --name mini-6
 
-poetry add \
+uv add \
   fastapi==0.109.0 \
   uvicorn[standard]==0.27.0 \
   celery==5.3.4 \

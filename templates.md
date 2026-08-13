@@ -9,29 +9,31 @@ Usa estos templates para crear proyectos rápidamente.
 ## Mínimo (Mini Proyectos)
 
 ```toml
-[tool.poetry]
+[project]
 name = "mini-X-nombre"
 version = "0.1.0"
 description = "Mini project X"
-authors = ["Your Name <email@example.com>"]
+authors = [{ name = "Your Name", email = "email@example.com" }]
 readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "sqlalchemy[asyncio]>=2.0.25",
+    "psycopg[binary]>=3.1.14",
+    "pydantic>=2.5.3",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-fastapi = "^0.109.0"
-uvicorn = { version = "^0.27.0", extras = ["standard"] }
-sqlalchemy = { version = "^2.0.25", extras = ["asyncio"] }
-psycopg = { version = "^3.1.14", extras = ["binary"] }
-pydantic = "^2.5.3"
-pydantic-settings = "^2.1.0"
-python-dotenv = "^1.0.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.4"
-pytest-asyncio = "^0.23.3"
-httpx = "^0.26.0"
-black = "^23.12.0"
-ruff = "^0.1.8"
+[dependency-groups]
+dev = [
+    "pytest>=7.4.4",
+    "pytest-asyncio>=0.23.3",
+    "httpx>=0.26.0",
+    "black>=23.12.0",
+    "ruff>=0.1.8",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -44,66 +46,67 @@ target-version = ['py311']
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
 ```
+
+> Proyecto de aplicación (no se publica como paquete), por eso no lleva `[build-system]`. `uv sync` crea el `.venv` e instala todo esto automáticamente.
 
 ## Completo (Proyectos Grandes)
 
 ```toml
-[tool.poetry]
+[project]
 name = "project-rag-assistant"
 version = "1.0.0"
 description = "RAG Research Assistant API"
-authors = ["Your Name <email@example.com>"]
+authors = [{ name = "Your Name", email = "email@example.com" }]
 readme = "README.md"
 license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    # Web framework
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+
+    # Database & ORM
+    "sqlalchemy[asyncio]>=2.0.25",
+    "psycopg[binary]>=3.1.14",
+    "pgvector>=0.2.1",
+    "alembic>=1.13.0",
+
+    # Data validation
+    "pydantic>=2.5.3",
+    "pydantic-settings>=2.1.0",
+
+    # Caching & Queue
+    "redis>=5.0.1",
+    "celery>=5.3.4",
+
+    # LLM & AI
+    "anthropic>=0.20.0",
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.34",
+
+    # File processing
+    "pypdf>=4.0.1",
+    "python-multipart>=0.0.6",
+
+    # Utils
+    "python-dotenv>=1.0.0",
+    "python-json-logger>=2.0.7",
+]
+
+[project.urls]
 repository = "https://github.com/username/project-rag"
 
-[tool.poetry.dependencies]
-python = "^3.11"
-
-# Web framework
-fastapi = "^0.109.0"
-uvicorn = { version = "^0.27.0", extras = ["standard"] }
-
-# Database & ORM
-sqlalchemy = { version = "^2.0.25", extras = ["asyncio"] }
-psycopg = { version = "^3.1.14", extras = ["binary"] }
-pgvector = "^0.2.1"
-alembic = "^1.13.0"
-
-# Data validation
-pydantic = "^2.5.3"
-pydantic-settings = "^2.1.0"
-
-# Caching & Queue
-redis = "^5.0.1"
-celery = "^5.3.4"
-
-# LLM & AI
-anthropic = "^0.20.0"
-langchain = "^0.1.0"
-langchain-community = "^0.0.34"
-
-# File processing
-pypdf = "^4.0.1"
-python-multipart = "^0.0.6"
-
-# Utils
-python-dotenv = "^1.0.0"
-python-json-logger = "^2.0.7"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.4"
-pytest-asyncio = "^0.23.3"
-pytest-cov = "^4.1.0"
-httpx = "^0.26.0"
-black = "^23.12.0"
-ruff = "^0.1.8"
-mypy = "^1.7.0"
+[dependency-groups]
+dev = [
+    "pytest>=7.4.4",
+    "pytest-asyncio>=0.23.3",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.26.0",
+    "black>=23.12.0",
+    "ruff>=0.1.8",
+    "mypy>=1.7.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -124,10 +127,6 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
 ```
 
 ---
@@ -281,18 +280,18 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
-RUN curl -sSL https://install.python-poetry.org | python3 - && \
-    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Copy project files
-COPY pyproject.toml poetry.lock* ./
+COPY pyproject.toml uv.lock* ./
 
-# Install Python dependencies
-RUN poetry install --no-root --no-directory
+# Install Python dependencies (cached layer, before copying app code)
+RUN uv sync --frozen --no-install-project
 
 # Copy app
 COPY . .
+RUN uv sync --frozen
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
@@ -300,7 +299,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run
 EXPOSE 8000
-CMD ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 ---
@@ -762,8 +761,8 @@ touch app/{models,schemas,routes}/__init__.py
 
 # 4. Setup
 docker-compose up -d
-poetry install
-poetry run uvicorn app.main:app --reload
+uv sync
+uv run uvicorn app.main:app --reload
 ```
 
 ¡Listo! Templates copiar-pegar para empezar rápido 🚀

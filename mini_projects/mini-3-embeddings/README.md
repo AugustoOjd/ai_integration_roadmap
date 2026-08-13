@@ -49,13 +49,13 @@ Store or Compare
  
 ```bash
 # 1. Install dependencies
-poetry add anthropic numpy
+uv add anthropic numpy
  
 # 2. Create .env
 export ANTHROPIC_API_KEY=sk-ant-...
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints

@@ -127,7 +127,7 @@ sr-backend-roadmap/
 ```bash
 # Required
 Python 3.11+
-Poetry (Python package manager)
+uv (Python package manager)
 Docker + Docker Compose
 Git
 
@@ -153,10 +153,10 @@ cp .env.example .env
 docker-compose up -d
 
 # 5. Install dependencies
-poetry install
+uv sync
 
 # 6. Run application
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 
 # 7. Test it
 curl http://localhost:8000/health

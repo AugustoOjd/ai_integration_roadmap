@@ -32,7 +32,7 @@ While not done:
  
 ```bash
 # Copy from Mini 8 + add agent executor
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints

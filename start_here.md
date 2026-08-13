@@ -131,8 +131,8 @@ mkdir -p tests
 
 # 6. Prueba
 docker-compose up -d
-poetry install
-poetry run uvicorn app.main:app --reload
+uv sync
+uv run uvicorn app.main:app --reload
 curl http://localhost:8000/health
 ```
 

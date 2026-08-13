@@ -38,16 +38,16 @@ Client checks status
  
 ```bash
 # 1. Install
-poetry add celery redis
+uv add celery redis
  
 # 2. Start services
 docker-compose up -d
  
 # 3. Start worker
-poetry run celery -A app.celery_app worker --loglevel=info
+uv run celery -A app.celery_app worker --loglevel=info
  
 # 4. Run app (different terminal)
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints

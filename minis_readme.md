@@ -48,7 +48,7 @@ PostgreSQL Database
 ### Prerequisites
 ```bash
 Python 3.11+
-Poetry
+uv
 Docker + Docker Compose
 ```
  
@@ -56,13 +56,13 @@ Docker + Docker Compose
  
 ```bash
 # 1. Install dependencies
-poetry install
+uv sync
  
 # 2. Start database
 docker-compose up -d
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
  
 # 4. Test
 curl http://localhost:8000/health
@@ -206,7 +206,7 @@ docker-compose down
 **SQLAlchemy errors?**
 ```bash
 # Make sure async driver is installed
-poetry install
+uv sync
 ```
  
 **Cannot connect to DB?**
@@ -304,7 +304,7 @@ Return to client
 cp -r ../mini-1-crud-api/* .
  
 # 2. Add Redis
-poetry add redis
+uv add redis
  
 # 3. Update docker-compose.yml
 # Add redis service (see template)
@@ -313,7 +313,7 @@ poetry add redis
 docker-compose up -d
  
 # 5. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📊 Caching Strategy
@@ -604,13 +604,13 @@ Store or Compare
  
 ```bash
 # 1. Install dependencies
-poetry add anthropic numpy
+uv add anthropic numpy
  
 # 2. Create .env
 export ANTHROPIC_API_KEY=sk-ant-...
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints
@@ -865,10 +865,10 @@ Return top-K results
 docker-compose up -d
  
 # 2. Install dependencies
-poetry install
+uv sync
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints
@@ -1192,13 +1192,13 @@ Store chunks in DB
  
 ```bash
 # 1. Install dependencies
-poetry add pypdf python-multipart
+uv add pypdf python-multipart
  
 # 2. Start database
 docker-compose up -d
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
  
 # 4. Upload a PDF
 curl -X POST http://localhost:8000/documents/upload \
@@ -1374,7 +1374,7 @@ mini-5-pdf-processing/
 pytest tests/test_documents.py
  
 # Test with actual PDF
-poetry run pytest -v
+uv run pytest -v
 ```
  
 ## 📈 Performance
@@ -1423,7 +1423,7 @@ git push
 # For now, stick with text-based PDFs
  
 # Check extraction
-poetry run python -c "
+uv run python -c "
 from pypdf import PdfReader
 pdf = PdfReader('sample.pdf')
 print(pdf.pages[0].extract_text()[:100])
@@ -1519,16 +1519,16 @@ Client checks status
  
 ```bash
 # 1. Install
-poetry add celery redis
+uv add celery redis
  
 # 2. Start services
 docker-compose up -d
  
 # 3. Start worker
-poetry run celery -A app.celery_app worker --loglevel=info
+uv run celery -A app.celery_app worker --loglevel=info
  
 # 4. Run app (different terminal)
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints
@@ -1833,10 +1833,10 @@ Dead letter queue / alert
 docker-compose up -d
  
 # Start worker
-poetry run celery -A app.celery_app worker --loglevel=info
+uv run celery -A app.celery_app worker --loglevel=info
  
 # Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📋 Retry Logic
@@ -2141,13 +2141,13 @@ LLM generates response
  
 ```bash
 # 1. Install
-poetry add anthropic
+uv add anthropic
  
 # 2. Create .env
 export ANTHROPIC_API_KEY=sk-ant-...
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints
@@ -2434,7 +2434,7 @@ While not done:
  
 ```bash
 # Copy from Mini 8 + add agent executor
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints

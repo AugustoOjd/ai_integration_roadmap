@@ -38,10 +38,10 @@ Return top-K results
 docker-compose up -d
  
 # 2. Install dependencies
-poetry install
+uv sync
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📝 API Endpoints

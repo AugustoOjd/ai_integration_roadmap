@@ -42,7 +42,7 @@ Return to client
 cp -r ../mini-1-crud-api/* .
  
 # 2. Add Redis
-poetry add redis
+uv add redis
  
 # 3. Update docker-compose.yml
 # Add redis service (see template)
@@ -51,7 +51,7 @@ poetry add redis
 docker-compose up -d
  
 # 5. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📊 Caching Strategy

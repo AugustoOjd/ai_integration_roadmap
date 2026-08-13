@@ -36,10 +36,10 @@ Dead letter queue / alert
 docker-compose up -d
  
 # Start worker
-poetry run celery -A app.celery_app worker --loglevel=info
+uv run celery -A app.celery_app worker --loglevel=info
  
 # Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 ```
  
 ## 📋 Retry Logic

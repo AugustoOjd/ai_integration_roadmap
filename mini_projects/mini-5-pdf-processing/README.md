@@ -36,13 +36,13 @@ Store chunks in DB
  
 ```bash
 # 1. Install dependencies
-poetry add pypdf python-multipart
+uv add pypdf python-multipart
  
 # 2. Start database
 docker-compose up -d
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
  
 # 4. Upload a PDF
 curl -X POST http://localhost:8000/documents/upload \
@@ -218,7 +218,7 @@ mini-5-pdf-processing/
 pytest tests/test_documents.py
  
 # Test with actual PDF
-poetry run pytest -v
+uv run pytest -v
 ```
  
 ## 📈 Performance
@@ -267,7 +267,7 @@ git push
 # For now, stick with text-based PDFs
  
 # Check extraction
-poetry run python -c "
+uv run python -c "
 from pypdf import PdfReader
 pdf = PdfReader('sample.pdf')
 print(pdf.pages[0].extract_text()[:100])
