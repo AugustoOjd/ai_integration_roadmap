@@ -1,0 +1,40 @@
+services:
+  # Database used by the FastAPI app (SQLAlchemy async + asyncpg driver)
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mini_db
+    ports:
+      # host:container -> lets you connect from outside Docker too (psql, DBeaver, etc.)
+      - "5432:5432"
+    volumes:
+      # Named volume so data survives `docker-compose down` (but not `down -v`)
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # `app` waits for this to pass before it starts, so it never races the DB startup
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # The FastAPI app itself, built from the Dockerfile in this folder
+  app:
+    build: .
+    environment:
+      # asyncpg driver, pointing at the "postgres" service name (Docker's internal DNS)
+      DATABASE_URL: postgresql+asyncpg://postgres:password@postgres:5432/mini_db
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount source code so edits on the host are picked up without rebuilding the image
+      - ./src:/app/src
+    # Override the Dockerfile's production CMD with --reload for local development
+    command: uv run uvicorn mini_1_crud_api.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:

@@ -1,0 +1,26 @@
+# Version control (not needed inside the image)
+.git
+.gitignore
+
+# Python bytecode & tool caches
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv creates its own venv inside the container during the build;
+# never copy the host's .venv in (wrong platform/paths, and it's huge)
+.venv/
+
+# Secrets: env files must never be baked into the image
+.env
+.env.*
+!.env.example
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store

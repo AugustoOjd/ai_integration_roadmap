@@ -37,7 +37,7 @@ PostgreSQL Database
 ### Prerequisites
 ```bash
 Python 3.11+
-Poetry
+uv
 Docker + Docker Compose
 ```
  
@@ -45,13 +45,13 @@ Docker + Docker Compose
  
 ```bash
 # 1. Install dependencies
-poetry install
+uv sync
  
 # 2. Start database
 docker-compose up -d
  
 # 3. Run app
-poetry run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
  
 # 4. Test
 curl http://localhost:8000/health
@@ -195,7 +195,7 @@ docker-compose down
 **SQLAlchemy errors?**
 ```bash
 # Make sure async driver is installed
-poetry install
+uv sync
 ```
  
 **Cannot connect to DB?**

@@ -1,0 +1,43 @@
+[project]
+name = "mini-1-crud-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "augusto" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "sqlalchemy[asyncio]>=2.0.25",
+    "asyncpg>=0.29.0",
+    "pydantic>=2.5.3",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.4",
+    "pytest-asyncio>=0.23.3",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.26.0",
+]
+
+[project.scripts]
+mini-1-crud-api = "mini_1_crud_api:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# All async fixtures/tests share one event loop for the whole session, instead
+# of a fresh loop per test — required so test_engine's connection pool (and the
+# session-scoped setup_database fixture) never gets used from a different loop
+# than the one it was created in, which asyncpg forbids.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
