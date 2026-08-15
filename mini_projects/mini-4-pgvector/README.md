@@ -79,11 +79,14 @@ CREATE TABLE notes (
   id UUID PRIMARY KEY,
   title VARCHAR(200),
   content TEXT,
-  embedding vector(1536),  -- NEW: Vector column
+  embedding vector(384),  -- NEW: Vector column — 384 = all-MiniLM-L6-v2 (Mini 3).
+                          -- The size is fixed at CREATE TABLE time: changing the
+                          -- embedding model means ALTER TABLE + regenerating every row.
   created_at TIMESTAMP
 );
  
--- INDEX for faster search
+-- INDEX for faster search.
+-- vector_cosine_ops means only the <=> operator can use this index.
 CREATE INDEX ix_notes_embedding 
   ON notes USING ivfflat(embedding vector_cosine_ops);
 ```
@@ -91,30 +94,33 @@ CREATE INDEX ix_notes_embedding
 ## 📊 pgvector Operators
  
 ```sql
--- Cosine similarity (most common)
+-- Cosine distance (what we use — pairs with vector_cosine_ops)
 SELECT * FROM notes
-ORDER BY embedding <-> query_embedding
+ORDER BY embedding <=> query_embedding
 LIMIT 5;
  
--- Euclidean distance
-ORDER BY embedding <=> query_embedding
- 
--- Inner product
-ORDER BY embedding <#> query_embedding
- 
--- L2 distance
+-- L2 / Euclidean distance (pairs with vector_l2_ops)
 ORDER BY embedding <-> query_embedding
+ 
+-- Negative inner product (pairs with vector_ip_ops)
+ORDER BY embedding <#> query_embedding
 ```
  
 ## 🎓 Key Concepts
  
 **Vector Operators:**
 ```python
-# In SQL:
-# <->  = cosine distance (preferred)
-# <=>  = euclidean distance
-# <#>  = inner product
+# In SQL — each operator has a matching index operator class:
+# <=>  = cosine distance          → vector_cosine_ops   (preferred for embeddings)
+# <->  = L2 / Euclidean distance  → vector_l2_ops
+# <#>  = NEGATIVE inner product   → vector_ip_ops       (multiply by -1 for the real value)
 ```
+ 
+> ⚠️ **The operator must match the index's operator class or the index is ignored.**
+> An index built with `vector_cosine_ops` is only used by `<=>`. Query it with
+> `<->` and Postgres silently falls back to a full table scan *and* ranks by the
+> wrong metric — no error, just slow and subtly wrong results. Confirm with
+> `EXPLAIN ANALYZE`: an `Index Scan` means it's working, a `Seq Scan` means it isn't.
  
 **Distance to Similarity:**
 ```python
@@ -171,10 +177,10 @@ SELECT
   id,
   title,
   content,
-  (1 - (embedding <-> :embedding)) as similarity
+  (1 - (embedding <=> :embedding)) as similarity
 FROM notes
 WHERE embedding IS NOT NULL
-ORDER BY embedding <-> :embedding
+ORDER BY embedding <=> :embedding
 LIMIT :top_k
 """
  
@@ -235,7 +241,7 @@ USING ivfflat(embedding vector_cosine_ops);
 ```sql
 SELECT * FROM notes
 WHERE created_at > now() - interval '7 days'
-ORDER BY embedding <-> query_embedding
+ORDER BY embedding <=> query_embedding
 LIMIT 10;
 ```
  
@@ -246,7 +252,7 @@ LIMIT 10;
 ## 📊 Benchmark
  
 ````
-Setup: 10,000 notes, 1536-D embeddings
+Setup: 10,000 notes, 384-D embeddings
  
 Search without index:  ~500-800ms (full table scan)
 Search with IVFFlat:   ~10-50ms   (50x faster!)

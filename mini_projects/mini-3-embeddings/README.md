@@ -9,7 +9,7 @@ Generate and compare embeddings (vector representations of text).
 - ✅ Cosine similarity calculation
 - ✅ Normalization
 - ✅ Dimensionality concepts
-- ✅ LLM embeddings API
+- ✅ Running an embedding model locally
  
 ## 📚 What Are Embeddings?
  
@@ -18,7 +18,7 @@ Embeddings convert text into vectors (arrays of numbers).
 ````
 Text: "python is a programming language"
     ↓
-Embedding: [-0.23, 0.45, 0.12, ..., 0.78]  (1536 dimensions)
+Embedding: [-0.23, 0.45, 0.12, ..., 0.78]  (384 dimensions)
     ↓
 Properties:
 - Each dimension represents semantic meaning
@@ -31,9 +31,9 @@ Properties:
 ````
 Text Input
     ↓
-Embedding Model
+Embedding Model (runs in-process, no API call)
     ↓
-Vector (1536-D)
+Vector (384-D)
     ↓
 Store or Compare
 ````
@@ -41,20 +41,26 @@ Store or Compare
 ## 📚 Tech Stack
  
 - **FastAPI** - Web framework
-- **Anthropic Claude** - Embedding generation
+- **sentence-transformers** - Embedding generation, running locally
 - **NumPy** - Vector math
 - **Pydantic** - Data validation
+ 
+> **Why a local model instead of an API?** Anthropic does not offer an embedding
+> model — its docs point to third-party providers (Voyage AI among them).
+> Running `all-MiniLM-L6-v2` locally means no API key, no per-request cost, and
+> no rate limit, so you can generate thousands of embeddings while experimenting.
+> The tradeoff is a one-time ~90MB model download (plus PyTorch as a dependency).
+> Swapping in a hosted provider later only changes `services/embeddings.py`.
  
 ## 🚀 Quick Start
  
 ```bash
 # 1. Install dependencies
-uv add anthropic numpy
+uv add sentence-transformers numpy
  
-# 2. Create .env
-export ANTHROPIC_API_KEY=sk-ant-...
- 
-# 3. Run app
+# 2. Run app — no API key needed.
+#    The model downloads automatically on first use (~90MB, cached afterwards),
+#    so the first startup is slower than the ones after it.
 uv run uvicorn app.main:app --reload
 ```
  
@@ -70,8 +76,8 @@ POST /embeddings/embed
 Response:
 {
   "text": "Python is awesome",
-  "embedding": [-0.23, 0.45, ..., 0.78],  # 1536 numbers
-  "dimension": 1536
+  "embedding": [-0.23, 0.45, ..., 0.78],  # 384 numbers
+  "dimension": 384
 }
  
 # Compare similarity
@@ -122,9 +128,13 @@ similarity(emb1, emb3) → 0.15  # Cat and bicycle are different
 ## 🎓 Key Concepts
  
 **Embedding Dimension:**
-- 1536D for Claude embeddings
-- Higher = more expressive but slower
-- 128D to 3072D common range
+- Fixed by the model, not by you — every model outputs its own size
+- `all-MiniLM-L6-v2` (this mini): 384D · Voyage 4: 1024D · OpenAI ada-002: 1536D
+- Higher = more nuance captured, but more storage and slower comparisons
+- 128D to 3072D is the common range
+- Vectors from different models are **not comparable** — you can't compare a 384-D
+  vector to a 1024-D one, and even at equal size the dimensions mean different
+  things. Switching models means regenerating every stored embedding.
  
 **Normalization:**
 ```python
@@ -188,16 +198,21 @@ curl -X POST http://localhost:8000/embeddings/similarity \
  
 ## 📈 Performance
  
-- Generation: ~200-500ms per text
+- First call: several seconds (downloads and loads the model into memory)
+- Generation after that: ~5-20ms per text on CPU (no network round trip)
 - Similarity: ~1ms (vector math only)
-- Batch: More efficient than individual calls
+- Batch: much more efficient — pass a list to `encode()` instead of looping
+ 
+Load the model **once** at startup, not per request. Re-instantiating
+`SentenceTransformer` on every call re-reads the model from disk and turns a
+20ms operation into a multi-second one.
  
 ## 💾 Storage (Preview)
  
 In Mini 4, you'll store embeddings in PostgreSQL:
 ````
 Text: "Python is a language"
-Embedding: [1536 numbers]
+Embedding: [384 numbers]
     ↓
 Store in database
     ↓
@@ -214,27 +229,38 @@ git push
  
 ## ❓ Troubleshooting
  
-**ANTHROPIC_API_KEY not working?**
+**First run is very slow / seems stuck?**
 ```bash
-# Check .env
-cat .env | grep ANTHROPIC
+# It's downloading the model (~90MB). Verify it landed in the cache:
+ls ~/.cache/huggingface/hub/
  
-# Test directly
-python -c "from anthropic import Anthropic; print('OK')"
+# Check the model loads and reports the expected dimension:
+uv run python -c "
+from sentence_transformers import SentenceTransformer
+m = SentenceTransformer('all-MiniLM-L6-v2')
+print(m.get_sentence_embedding_dimension())  # 384
+"
 ```
+ 
+**Every request is slow, not just the first?**
+````
+The model is being reloaded per request. Instantiate SentenceTransformer once
+at module level (or in the lifespan startup), never inside the route handler.
+````
  
 **Different embeddings for same text?**
 ````
-This shouldn't happen. Embeddings are deterministic.
-If it does, check your hashing method (if using local generation).
+This shouldn't happen — the model is deterministic for identical input.
+Check for stray whitespace or casing differences in what you're actually passing.
 ````
  
 ## 📚 Resources
  
-- [What are embeddings?](https://platform.openai.com/docs/guides/embeddings)
+- [What are embeddings? (Anthropic)](https://platform.claude.com/docs/en/build-with-claude/embeddings)
+- [sentence-transformers docs](https://sbert.net/)
+- [all-MiniLM-L6-v2 model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
 - [Cosine Similarity](https://en.wikipedia.org/wiki/Cosine_similarity)
 - [Vector Databases](https://www.pinecone.io/learn/vector-database/)
-- [Anthropic Embeddings](https://docs.anthropic.com)
  
 ## ⏱️ Timeline
  

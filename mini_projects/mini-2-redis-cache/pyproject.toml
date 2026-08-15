@@ -1,0 +1,41 @@
+[project]
+name = "mini-2-redis-cache"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.2",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "uvicorn[standard]>=0.52.3",
+]
+
+# No [build-system]: this is an app you run in place, not an installable
+# package — package = false makes that explicit instead of relying on the
+# absence of [build-system] to imply it.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# Puts the project root on sys.path so tests can `import app`. Needed because
+# package = false means app/ is never installed into the venv — unlike mini-1,
+# where the package was installed and pytest found it in site-packages.
+# (uvicorn doesn't need this: it inserts the working directory itself.)
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
