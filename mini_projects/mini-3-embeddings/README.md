@@ -162,12 +162,14 @@ mini-3-embeddings/
 │   │   └── embedding.py       # Request/response
 │   └── routes/
 │       └── embeddings.py      # Endpoints
-├── tests/
-│   └── test_embeddings.py
+├── .env                       # MODEL_NAME
 └── pyproject.toml
 ````
  
-## 🔬 Testing Similarity
+> No automated tests in this mini — the focus is the concept, and you verify it
+> by hand with the curl calls below. Testing comes back in Mini 4.
+ 
+## 🔬 Checking Similarity by Hand
  
 ```bash
 # Test identical texts
@@ -264,20 +266,20 @@ Check for stray whitespace or casing differences in what you're actually passing
  
 ## ⏱️ Timeline
  
-- Setup: 20 min
+- Setup: 20 min (plus the one-time model download)
 - Core logic: 1 hour
 - API endpoints: 45 min
-- Testing: 30 min
+- Trying it out: 30 min
 - **Total: 2-3 hours**
  
 ## ✅ Checklist
  
 - [ ] Install dependencies
 - [ ] Create embedding service
-- [ ] Test embedding generation
 - [ ] Implement similarity calculation
 - [ ] Create API endpoints
-- [ ] Test embeddings and similarity
+- [ ] Verify: similar texts score high, unrelated texts score low
+- [ ] Verify: a text compared with itself scores 1.0
 - [ ] Push to GitHub
  
 ## 🎯 Next: Mini 4

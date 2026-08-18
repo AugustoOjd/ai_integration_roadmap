@@ -1,0 +1,21 @@
+[project]
+name = "mini-3-embeddings"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "numpy>=2.5.2",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "sentence-transformers>=5.7.0",
+    "uvicorn[standard]>=0.52.3",
+]
+
+[dependency-groups]
+dev = []
+
+# No [build-system]: this is an app you run in place, not an installable
+# package — package = false makes that explicit instead of relying on the
+# absence of [build-system] to imply it.
+[tool.uv]
+package = false
