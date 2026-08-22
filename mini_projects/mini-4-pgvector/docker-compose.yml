@@ -1,0 +1,41 @@
+services:
+  postgres:
+    # pgvector es una extensión en C: tiene que venir en la imagen. Con
+    # postgres:16 pelado, CREATE EXTENSION vector falla.
+    image: pgvector/pgvector:pg16
+    environment:
+      # ${VAR} sale del .env de al lado (Compose lo carga solo, sin env_file).
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # Host 5433 porque mini-1/mini-2 ya ocupan 5432. Dentro sigue en 5432.
+      - "5433:5432"
+    volumes:
+      # Volumen nombrado: sobrevive a `down`, muere con `down -v`.
+      - postgres_data:/var/lib/postgresql/data
+      # Solo corre con el data dir vacío: editarlo después exige `down -v`.
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # Sin esto, depends_on desbloquea cuando arranca el proceso, segundos
+      # antes de que acepte queries.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      retries: 5
+
+  app:
+    build: .
+    environment:
+      # postgres:5432, no localhost:5433 — dentro de la red de Compose se llega
+      # por el nombre del servicio y el puerto del contenedor.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        # service_healthy y no solo `- postgres`: init_db() corre al arrancar y
+        # fallaría si Postgres aún no acepta conexiones.
+        condition: service_healthy
+
+volumes:
+  postgres_data:

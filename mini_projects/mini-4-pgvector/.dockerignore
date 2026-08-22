@@ -1,0 +1,14 @@
+# Everything here is excluded from the build CONTEXT — the tarball Docker ships
+# to the daemon before running a single instruction.
+# .venv alone is 1.1GB and would be uploaded on every build, then shadowed by
+# the one `uv sync` builds inside the image. Pure waste, twice.
+.venv/
+__pycache__/
+*.pyc
+
+# Real secrets; the image must get its config from the environment.
+.env
+
+.git/
+.pytest_cache/
+tests/

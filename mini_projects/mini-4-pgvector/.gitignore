@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+
+.env
+!.env.example
+# Notas personales de estudio, no parte del proyecto
+v-operators.md
+APRENDIZAJES.md

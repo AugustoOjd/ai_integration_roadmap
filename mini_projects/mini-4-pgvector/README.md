@@ -35,7 +35,7 @@ Return top-K results
  
 ```bash
 # 1. Start PostgreSQL with pgvector
-docker-compose up -d
+docker compose up -d postgres
  
 # 2. Install dependencies
 uv sync
@@ -43,6 +43,32 @@ uv sync
 # 3. Run app
 uv run uvicorn app.main:app --reload
 ```
+ 
+Or run the whole stack in containers:
+ 
+```bash
+docker compose up --build
+```
+ 
+### Load data and measure
+ 
+```bash
+# 10,000 synthetic notes across 5 topics (a few minutes: it embeds all of them)
+uv run python -m scripts.seed 10000
+ 
+# No index vs IVFFlat vs HNSW — latency AND recall
+uv run python -m scripts.benchmark
+```
+ 
+`-m` (not `python scripts/seed.py`) puts the cwd on `sys.path` so `import app` resolves.
+ 
+### Tests
+ 
+```bash
+uv run pytest -v
+```
+ 
+They create and drop a separate `mini_db_test` database, so the seeded data is left alone.
  
 ## 📝 API Endpoints
  
@@ -84,11 +110,25 @@ CREATE TABLE notes (
                           -- embedding model means ALTER TABLE + regenerating every row.
   created_at TIMESTAMP
 );
+```
  
--- INDEX for faster search.
+The index is **not** created here — see below.
+ 
+> ⚠️ **Never build an IVFFlat index on an empty table.**
+> IVFFlat learns its cluster centroids from the rows present at build time, and a
+> query only scans `ivfflat.probes` clusters (**1** by default). Built empty, the
+> centroids are meaningless: the one cluster the query opens is likely empty and
+> the search returns **zero rows** — no error, no warning.
+> This is exactly what happens if you put the index in `__table_args__`, because
+> `create_all()` runs before any data exists. So the model declares only the
+> column, and `scripts/benchmark.py` creates the index after loading data — which
+> is also what you do in production.
+ 
+```sql
+-- Run this AFTER the table has data. lists ≈ rows/1000 (up to 1M rows).
 -- vector_cosine_ops means only the <=> operator can use this index.
-CREATE INDEX ix_notes_embedding 
-  ON notes USING ivfflat(embedding vector_cosine_ops);
+CREATE INDEX ix_notes_embedding
+  ON notes USING ivfflat (embedding vector_cosine_ops) WITH (lists = 10);
 ```
  
 ## 📊 pgvector Operators
@@ -170,49 +210,68 @@ curl -X POST http://localhost:8000/notes/search \
  
 ## 💡 Query Example
  
-```python
-# Search implementation
-search_query = """
-SELECT 
-  id,
-  title,
-  content,
-  (1 - (embedding <=> :embedding)) as similarity
+The SQL we want Postgres to run:
+ 
+```sql
+SELECT id, title, content, 1 - (embedding <=> $1) AS similarity
 FROM notes
 WHERE embedding IS NOT NULL
-ORDER BY embedding <=> :embedding
-LIMIT :top_k
-"""
- 
-result = await db.execute(
-  text(search_query),
-  {
-    "embedding": str(query_embedding),
-    "top_k": 5
-  }
-)
+ORDER BY embedding <=> $1
+LIMIT $2
 ```
+ 
+Built through the ORM rather than `text()`, so pgvector serializes the list into
+a `vector` bind param instead of us formatting a string by hand:
+ 
+```python
+# cosine_distance() comes from Vector's comparator_factory and emits `<=>`.
+# Your IDE won't autocomplete it — it's resolved at runtime, not statically.
+distance = Note.embedding.cosine_distance(query_embedding)
+ 
+stmt = (
+    select(Note, (1 - distance).label("similarity"))
+    .where(Note.embedding.is_not(None))
+    .order_by(distance)          # raw distance, NOT `similarity` — see below
+    .limit(top_k)
+)
+result = await db.execute(stmt)
+```
+ 
+Three things that are easy to get wrong:
+ 
+- **Reuse the `distance` object.** Referencing it in both `SELECT` and `ORDER BY`
+  makes both compile to the same bind param, so the 384-float vector crosses the
+  wire once instead of twice.
+- **Order by the raw distance, not by `similarity`.** `1 - (a <=> b)` is a derived
+  expression the index cannot match; ordering by it forces a Seq Scan.
+- **`LIMIT` is not just output trimming.** It is what lets the index stop after a
+  few clusters instead of ranking the whole table.
  
 ## 📂 Folder Structure
  
 ````
 mini-4-pgvector/
 ├── app/
-│   ├── main.py
-│   ├── config.py
-│   ├── database.py
+│   ├── main.py                  # lifespan: loads model, checks dim, init_db
+│   ├── config.py                # settings + EMBEDDING_DIM + NORMALIZE_EMBEDDINGS
+│   ├── database.py              # UPDATED: CREATE EXTENSION before create_all
 │   ├── models/
-│   │   └── note.py              # UPDATED: Add embedding column
+│   │   └── note.py              # UPDATED: embedding column (no index — see above)
 │   ├── services/
-│   │   ├── embeddings.py        # From Mini 3
-│   │   └── search.py            # NEW: Search logic
+│   │   ├── embeddings.py        # From Mini 3, single model + embed_many()
+│   │   └── search.py            # NEW: the <=> query
 │   ├── routes/
-│   │   └── search.py            # NEW: Search endpoints
+│   │   └── notes.py             # NEW: POST /notes/ and POST /notes/search
 │   └── schemas/
-│       └── note.py
+│       └── note.py              # NEW: SearchRequest / SearchResult
+├── scripts/
+│   ├── seed.py                  # NEW: N synthetic notes across 5 topics
+│   └── benchmark.py             # NEW: no index vs IVFFlat vs HNSW
 ├── tests/
+│   ├── conftest.py              # separate mini_db_test, rollback per test
 │   └── test_search.py
-├── docker-compose.yml           # UPDATED: pgvector image
+├── init.sql                     # CREATE EXTENSION on first boot
+├── docker-compose.yml           # UPDATED: pgvector image + app service
 └── pyproject.toml               # UPDATED: Add pgvector
 ````
  
@@ -222,12 +281,17 @@ mini-4-pgvector/
 # docker-compose.yml uses pgvector image
 image: pgvector/pgvector:pg16
  
-# Enable in code
+# Enable in code — text() is required, SQLAlchemy 2.0 rejects raw strings.
+# Order matters: create_all emits `embedding vector(384)` and Postgres
+# rejects an unknown type.
 async def init_db():
     async with engine.begin() as conn:
-        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
 ```
+ 
+This duplicates `init.sql` on purpose: that file only runs on a fresh Docker
+volume, and does not exist at all on managed Postgres (RDS, Supabase, Neon).
  
 ## ⚡ Performance Tips
  
@@ -251,13 +315,30 @@ LIMIT 10;
  
 ## 📊 Benchmark
  
-````
-Setup: 10,000 notes, 384-D embeddings
+Measured with `scripts/benchmark.py` — 10,000 notes, 384-D, top_k=10,
+5 queries × 20 repetitions, laptop CPU:
  
-Search without index:  ~500-800ms (full table scan)
-Search with IVFFlat:   ~10-50ms   (50x faster!)
-Search with HNSW:      ~5-20ms    (100x faster!)
-````
+| Config | Median | p95 | Recall | Build |
+|---|---|---|---|---|
+| No index (Seq Scan) | 5.3 ms | 6.5 ms | 100% | — |
+| IVFFlat (`lists=10`) | 1.1 ms | 1.4 ms | **96%** | 0.1 s |
+| HNSW | 0.8 ms | 1.1 ms | 100% | 0.7 s |
+ 
+**Two things worth noticing, because they contradict the usual pitch:**
+ 
+1. **The speedup is ~5x, not 50x.** 10,000 dot products over 384 dimensions is
+   trivial work for a modern CPU, and pgvector uses SIMD. At this scale the index
+   is a nicety. It becomes essential at hundreds of thousands of rows — try
+   `uv run python -m scripts.seed 200000` to watch the Seq Scan degrade while the
+   index times barely move.
+ 
+2. **Recall is the axis that actually matters.** IVFFlat missing 4% of the true
+   top-10 is the price of its speed, and latency alone would never show it. An
+   index that is 50x faster but loses 40% of results is worthless — always measure
+   both. The benchmark gets its ground truth by forcing `enable_indexscan = off`.
+ 
+HNSW being both faster *and* more accurate is the expected trade: it pays for it
+at build time (7x slower here, and the gap widens with scale).
  
 ## 🚢 Deploy
  
@@ -308,13 +389,13 @@ SELECT id, embedding FROM notes LIMIT 5;
  
 ## ✅ Checklist
  
-- [ ] Use pgvector Docker image
-- [ ] Create vector column in notes
-- [ ] Implement embedding generation
-- [ ] Add search endpoint
-- [ ] Create similarity index
-- [ ] Test search results
-- [ ] Benchmark performance
+- [x] Use pgvector Docker image
+- [x] Create vector column in notes
+- [x] Implement embedding generation
+- [x] Add search endpoint
+- [x] Create similarity index — **after** loading data, not in `create_all`
+- [x] Test search results
+- [x] Benchmark performance — latency *and* recall
 - [ ] Push to GitHub
  
 ## 🎯 Next: Mini 5
