@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+.env
+!.env.example
+
+# Notas personales de estudio, no parte del proyecto
+APRENDIZAJES.md
