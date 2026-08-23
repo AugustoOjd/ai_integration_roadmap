@@ -444,6 +444,74 @@ logger.info("Document uploaded", extra={
 - ✅ Error rates
 - ✅ Database connections
 
+## 🖥️ Optional: A Frontend
+
+**Not part of the scope.** This project is an API — `curl` and `/docs` are enough
+to exercise every endpoint. Skip this section unless you want something to show.
+
+If you do add one, note that `POST /search/query` **streams** the LLM answer.
+That single fact rules out the classic server-rendered approach: you cannot dribble
+tokens into a Jinja2 template that was already rendered in one shot.
+
+### Option 1 — One HTML file + `fetch` ← recommended
+
+No `npm`, no build step, ~80 lines. Read the stream with the browser's Streams API
+and paint tokens as they arrive:
+
+```python
+# app/main.py
+from fastapi.responses import FileResponse
+
+@app.get("/")
+async def ui():
+    return FileResponse("static/index.html")
+```
+
+```javascript
+// static/index.html — the part that matters
+const res = await fetch("/rag/query", {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({query: input.value}),
+});
+
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+while (true) {
+  const {done, value} = await reader.read();
+  if (done) break;
+  output.textContent += decoder.decode(value, {stream: true});
+}
+```
+
+**Why this one:** consuming a `StreamingResponse` end to end is genuinely part of
+what this project teaches. A frontend toolchain is not.
+
+### Option 2 — A real SPA (React + Vite)
+
+Since **FastAPI 0.138.0** (June 2026) there is a first-class way to serve a built
+SPA:
+
+```python
+app.frontend("/", directory="dist")
+```
+
+It replaces the old `mount(StaticFiles(html=True))` + catch-all hack, and gets the
+fallback right: a missing asset returns **404**, while a missing *page* falls back
+to `index.html` so the client router can handle it. With the old hack a missing
+`.js` returned HTML, and the browser choked parsing it.
+
+Later versions added dependencies in `frontend()` (0.139.0, e.g. cookie auth) and
+`check_dir="auto"` for `fastapi dev` (0.141.0).
+
+**The cost:** a whole frontend toolchain in a backend roadmap. Worth it only if you
+want this in a portfolio.
+
+### Option 3 — Jinja2 templates
+
+Fits poorly here, precisely because of streaming. Mentioned only so you know it was
+considered and rejected.
+
 ## 🎯 What Makes This Production-Ready
 
 ✅ **Async everywhere** (FastAPI, SQLAlchemy, Redis)  
@@ -594,6 +662,9 @@ docker-compose exec postgres psql -U postgres -d rag_db -c \
 - [ ] README visible
 - [ ] Sample documents included
 - [ ] Issue templates setup
+
+### Optional (not required to consider this done)
+- [ ] Frontend — see [Optional: A Frontend](#-optional-a-frontend)
 
 ## 📊 Expected Metrics (Production)
 
