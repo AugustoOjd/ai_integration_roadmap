@@ -1,0 +1,38 @@
+[project]
+name = "mini-5-pdf-processing"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "pypdf>=6.1.1",
+    "python-multipart>=0.0.20",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
+
+# App que se corre en sitio, no un paquete instalable. Sin esto uv construye e
+# instala app/ en el venv en cada sync.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# package = false → app/ no está en site-packages: raíz al sys.path para
+# `import app`. (uvicorn no lo necesita, mete el cwd solo.)
+pythonpath = ["."]
+# auto: trata los tests async como asyncio sin decorar cada uno.
+# Loop de sesión: el pool de asyncpg queda atado al loop que lo creó.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]

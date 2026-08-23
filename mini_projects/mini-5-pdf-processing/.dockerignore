@@ -1,0 +1,12 @@
+# Excluido del build CONTEXT: el tarball que Docker manda al daemon antes de
+# ejecutar la primera instrucción. .venv se reconstruye dentro con `uv sync`.
+.venv/
+__pycache__/
+*.pyc
+
+# Secretos reales; la imagen recibe su config por variables de entorno.
+.env
+
+.git/
+.pytest_cache/
+tests/
