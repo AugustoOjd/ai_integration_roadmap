@@ -1,0 +1,51 @@
+[project]
+name = "project-1-rag-assistant"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "openai>=2.9.0",
+    "pgvector>=0.5.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "pypdf>=6.1.1",
+    "python-multipart>=0.0.20",
+    "redis>=6.4.0",
+    "sentence-transformers>=6.0.0",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "torch>=2.13.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+# El torch de PyPI trae el runtime CUDA (~2.5GB que esta app CPU nunca usa).
+# Con este índice el venv baja a 1.1GB.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+# explicit: aquí también viven numpy/sympy, más viejos que en PyPI. Sin esto uv
+# buscaría todo aquí y resolvería contra esas copias.
+explicit = true
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
+
+# App que se corre en sitio, no un paquete instalable. Sin esto uv construye e
+# instala app/ en el venv en cada sync.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
