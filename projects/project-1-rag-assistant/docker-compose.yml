@@ -1,0 +1,57 @@
+services:
+  postgres:
+    # pgvector es una extensión en C: tiene que venir en la imagen. Con
+    # postgres:16 pelado, CREATE EXTENSION vector falla.
+    image: pgvector/pgvector:pg16
+    environment:
+      # ${VAR} sale del .env de al lado (Compose lo carga solo, sin env_file).
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5435}:5432"
+    volumes:
+      # Volumen nombrado: sobrevive a `down`, muere con `down -v`.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  app:
+    build: .
+    environment:
+      # Nombres de servicio y puertos internos, no localhost: dentro de la red
+      # de Compose se llega por el nombre del servicio.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      API_KEY: ${API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        # service_healthy y no solo `- postgres`: init_db() corre al arrancar y
+        # fallaría si Postgres aún no acepta conexiones.
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Monta el código del host: editas y --reload recarga sin rebuild.
+      - ./app:/app/app
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:

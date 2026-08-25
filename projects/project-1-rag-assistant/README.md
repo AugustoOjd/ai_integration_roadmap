@@ -26,6 +26,35 @@ A complete RAG system that:
 
 **Real-world use case:** Research assistant, documentation search, Q&A system
 
+### Corpus: data, not product
+
+Nothing in this app is domain-specific. The corpus arrives through
+`POST /documents/upload` like any other file, so swapping the subject matter is an
+upload, never a code change.
+
+**Test corpus:** the Riftbound TCG rulebook and FAQ — chosen deliberately, because
+a good corpus for *developing* a RAG has three properties:
+
+| Property | Why it matters |
+|---|---|
+| The base LLM doesn't know it | Proves the answer came from **retrieval**, not from model memory. With a corpus the model already knows, a correct answer tells you nothing. |
+| Questions have verifiable answers | Lets you build an eval set and actually **measure** whether `CHUNK_SIZE` was a good choice — the metric Mini 5 could not provide. |
+| Questions repeat across users | The Redis cache gets a real hit ratio instead of being decorative. |
+
+Any rulebook, manual, or reference work with those properties does the job. Swap
+it for a different game, a legal code, or an API reference and the system behaves
+the same.
+
+**What that forbids in the code:**
+
+- No prompt that names the domain — the system prompt says *"answer only from the
+  provided context, cite your sources, refuse when the context is insufficient"*
+  and nothing more
+- No parsing tied to one document's structure (rule numbers, card names)
+- Chunk metadata stays generic: `source`, `page`, `section` — meaningful for a
+  rulebook and for a novel alike
+- The eval set is a fixture that ships with the corpus, not code
+
 ## 🏗️ Architecture
 
 ```
@@ -48,20 +77,25 @@ A complete RAG system that:
 │    ├─ Send to LLM with context              │
 │    └─ Stream response                       │
 │                                             │
-│  POST /rag/query                            │
+│  POST /chat  ·  POST /chat/stream           │
 │    └─ Full RAG pipeline (all above)         │
 │                                             │
 └─────────────────────────────────────────────┘
         ↓              ↓              ↓
    PostgreSQL       Redis          Anthropic
-   (pgvector)       (cache)        (LLM + embeddings)
+   (pgvector)       (cache)        (answers only)
+                                        ↑
+              embeddings run LOCALLY via sentence-transformers (Mini 3):
+              Anthropic has no embeddings API, and nothing leaves the machine
+              during ingestion.
 ```
 
 ## 📚 Tech Stack
 
 ### Core
-- **FastAPI** 0.109+ - Web framework
-- **Python** 3.11+ - Runtime
+- **FastAPI** 0.141+ - Web framework
+- **Python** 3.12+ - Runtime
+- **uv** - Dependency management
 - **Uvicorn** - ASGI server
 
 ### Database & Storage
@@ -71,9 +105,10 @@ A complete RAG system that:
 - **SQLAlchemy** 2.0+ - Async ORM
 
 ### AI/LLM
-- **Anthropic Claude** - LLM for answers
-- **LangChain** - Optional utilities
-- **Embeddings** - Vector representation
+- **Anthropic Claude** (`claude-opus-5`) - LLM for answers
+- **sentence-transformers** (`all-MiniLM-L6-v2`, 384-D) - Embeddings, run locally
+- **LangChain** - Not used. Mini 3-5 built these pieces by hand on purpose;
+  see `mini-4-pgvector/APRENDIZAJES.md`
 
 ### Infrastructure
 - **Docker** - Containerization
@@ -93,8 +128,8 @@ A complete RAG system that:
 ### Prerequisites
 
 ```bash
-Python 3.11+
-Poetry
+Python 3.12+
+uv
 Docker + Docker Compose
 ANTHROPIC_API_KEY=sk-ant-...
 ```
@@ -102,32 +137,80 @@ ANTHROPIC_API_KEY=sk-ant-...
 ### Local Setup
 
 ```bash
-# 1. Clone/navigate to project
-cd project-1-rag-assistant
+# 1. Navigate to project
+cd projects/project-1-rag-assistant
 
 # 2. Install dependencies
-poetry install
+uv sync
 
 # 3. Setup environment
 cp .env.example .env
 # Edit .env with your ANTHROPIC_API_KEY
 
 # 4. Start services
-docker-compose up -d
+docker compose up -d postgres redis
 
 # Verify database is ready
-docker-compose logs postgres | grep "ready"
+docker compose ps          # both must say "healthy", not just "running"
 
-# 5. Run migrations (if using Alembic)
-poetry run alembic upgrade head
+# 5. Start app — init_db() creates the tables on startup
+uv run uvicorn app.main:app --reload
 
-# 6. Start app
-poetry run uvicorn app.main:app --reload
-
-# 7. Test
+# 6. Test
 curl http://localhost:8000/health
-curl http://localhost:8000/docs  # Interactive API docs
+open http://localhost:8000/docs   # Interactive API docs
 ```
+
+> **Note on migrations.** Mini 1-5 used `Base.metadata.create_all()` from the
+> `lifespan`, and this project can start the same way. Alembic is the real answer
+> once the schema starts changing, but it is not a prerequisite for getting the
+> pipeline running — add it when a column change first forces you to drop the
+> database.
+
+> **Starting from the template.** `mini_projects/_template/` has the skeleton
+> already resolved (config, database, lifespan, `/health`, Dockerfile). Two things
+> to change here: the Postgres image must be `pgvector/pgvector:pg16`, and you need
+> a `redis` service.
+
+### Ingest and measure
+
+```bash
+# 1. Upload the corpus (admin — needs X-API-Key when API_KEY is set)
+curl -X POST http://localhost:8000/documents/upload -F "file=@rulebook.pdf"
+
+# 2. Build the vector index — AFTER ingesting, never before
+uv run python -m scripts.create_index
+
+# 3. Score the eval set
+uv run python -m scripts.evaluate
+```
+
+> ⚠️ **Never build an IVFFlat index on an empty table.** It learns its cluster
+> centroids from the rows present at build time, and a query only scans
+> `ivfflat.probes` clusters (**1** by default). Built empty, the centroids are
+> meaningless and the search returns **zero rows** — no error, no warning. That is
+> why the index is not declared on the model, where `create_all()` would build it
+> before any data exists. Re-run `create_index` after every ingestion.
+
+`scripts/evaluate.py` reports **two separate numbers**, and that separation is the
+whole point:
+
+```
+REC  RESP   question
+ ok    ok   What is a champion legend?
+ NO    NO   How many runes do I get each turn?
+ ok    NO   What decides the outcome of a fight?
+```
+
+| Pattern | Where the problem is |
+|---|---|
+| `NO / NO` | Retrieval — tune `CHUNK_SIZE`, `TOP_K`, or the embedding model |
+| `ok / NO` | Generation — tune the prompt or the model |
+| `ok / ok` | Working |
+
+It prints the configuration it ran with, so two runs can be compared. This is what
+replaces eyeballing a single query: change `CHUNK_SIZE`, re-ingest, re-score, and
+read the difference.
 
 ## 📝 API Endpoints
 
@@ -153,61 +236,83 @@ GET /documents/
 GET /documents/{doc_id}/chunks
 ```
 
-### Semantic Search
+### Retrieval only — no LLM
 
 ```bash
-# Simple search
 POST /search/query
-{
-  "query": "What is machine learning?",
-  "top_k": 5
-}
+{ "query": "how do I win the game?", "top_k": 5 }
 
 Response:
 {
-  "query": "What is machine learning?",
+  "query": "how do I win the game?",
   "results": [
-    {
-      "filename": "document.pdf",
-      "chunk": "Machine learning is...",
-      "similarity": 0.89
-    }
+    { "source": "rulebook.pdf", "page": 12, "section": null,
+      "chunk": "...", "similarity": 0.43 }
+  ]
+}
+```
+
+**This endpoint is the debugging tool that matters.** When an answer is wrong,
+it separates the two possible causes: bad retrieval, or good retrieval and bad
+generation. Without it you end up tuning the prompt to fix a chunking problem.
+
+### RAG (full pipeline)
+
+```bash
+POST /chat
+{
+  "query": "and how many domains does it have?",
+  "history": [
+    { "role": "user", "content": "what is a legend?" },
+    { "role": "assistant", "content": "A legend is..." }
   ]
 }
 
-# Streaming search
-POST /search/query/stream
-{
-  "query": "...",
-  "top_k": 5
-}
-
-Response: Server-Sent Events (SSE) stream
-```
-
-### RAG (Full Pipeline)
-
-```bash
-# Complete RAG query
-POST /rag/query
-{
-  "query": "Summarize the main findings",
-  "top_k": 5
-}
-
 Response:
 {
-  "query": "Summarize the main findings",
-  "relevant_documents": [
-    {
-      "filename": "...",
-      "chunk": "...",
-      "similarity": 0.92
-    }
-  ],
-  "answer": "Based on the documents, the main findings are..."
+  "answer": "Two domains [1].",
+  "sources": [ { "n": 1, "source": "rulebook.pdf", "page": 3, "similarity": 0.43 } ]
 }
 ```
+
+- `history` is optional. It is **truncated server-side** to the last
+  `MAX_HISTORY_TURNS` and `MAX_HISTORY_CHARS`, and `role` accepts only
+  `user`/`assistant` — the system prompt is always the server's.
+- Retrieval prepends the previous user turn to the search query, so follow-ups
+  like *"and how many does it have?"* still find the right chunks. The LLM
+  receives the original question.
+- Answers without history are cached in Redis. A repeat question returns with
+  `X-Cache: HIT` and costs no tokens. Uploading or deleting a document bumps a
+  version counter that invalidates every cached answer at once.
+
+### Streaming
+
+```bash
+POST /chat/stream     # same body as /chat
+```
+
+Server-Sent Events. Sources arrive first so the UI can render citations while
+the text is still being written:
+
+```
+data: {"type":"sources","sources":[...]}
+data: {"type":"delta","text":"Two "}
+data: {"type":"delta","text":"domains"}
+data: {"type":"done"}
+```
+
+Not cached: emitting chunk by chunk and reassembling to store would defeat the
+point. Send repeat questions to `/chat`.
+
+### Authentication
+
+Admin endpoints (`/documents/*`) require an `X-API-Key` header, set through the
+`API_KEY` environment variable. Generate one with `openssl rand -hex 32`.
+
+Query endpoints are rate limited per client. `/health` is unauthenticated so
+container health checks and orchestrators can reach it.
+
+See `app/dependencies.py`.
 
 ## 📂 Folder Structure
 
@@ -215,71 +320,55 @@ Response:
 project-1-rag-assistant/
 │
 ├── README.md                    (this file)
-├── pyproject.toml              (Poetry dependencies)
+├── pyproject.toml              (uv dependencies)
+├── uv.lock                     (pinned versions)
 ├── docker-compose.yml          (Local services)
 ├── Dockerfile                  (Container image)
 ├── .env.example                (Configuration template)
 ├── .dockerignore
 ├── .gitignore
 │
-├── .github/
-│   └── workflows/
-│       └── deploy.yml          (CI/CD pipeline)
-│
-├── infra/                      (Infrastructure as Code)
-│   ├── main.tf                 (AWS configuration)
-│   ├── variables.tf
-│   └── outputs.tf
-│
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                 (FastAPI app entry)
-│   ├── config.py               (Settings & validation)
-│   ├── database.py             (DB connection)
+│   ├── main.py                 (lifespan, routers, /health)
+│   ├── config.py               (Settings + ENVIRONMENT validator)
+│   ├── database.py             (engine, get_db, init_db + CREATE EXTENSION)
+│   ├── dependencies.py         (require_api_key, rate_limit)
 │   │
-│   ├── models/                 (SQLAlchemy models)
-│   │   ├── __init__.py
-│   │   ├── document.py         (Document table)
-│   │   └── chunk.py            (DocumentChunk table)
+│   ├── models/
+│   │   └── document.py         (Document + DocumentChunk, both classes)
 │   │
-│   ├── schemas/                (Pydantic schemas)
-│   │   ├── __init__.py
-│   │   ├── document.py
-│   │   └── query.py
+│   ├── schemas/
+│   │   ├── document.py         (upload / chunk responses)
+│   │   ├── query.py            (search request / result)
+│   │   └── chat.py             (history validation + truncation)
 │   │
-│   ├── services/               (Business logic)
-│   │   ├── __init__.py
-│   │   ├── embeddings.py       (Vector generation)
-│   │   ├── documents.py        (PDF processing)
-│   │   ├── cache.py            (Redis caching)
-│   │   └── rag.py              (RAG orchestration)
+│   ├── services/
+│   │   ├── embeddings.py       (local model, embed + embed_many)
+│   │   ├── documents.py        (extract, page offsets, chunking)
+│   │   ├── search.py           (the <=> query)
+│   │   ├── prompt.py           (the four prompt blocks)
+│   │   ├── llm.py              (OpenAI-compatible client, generate + stream)
+│   │   ├── rag.py              (retrieve -> assemble -> generate)
+│   │   └── cache.py            (Redis client + answer cache)
 │   │
-│   ├── routes/                 (API endpoints)
-│   │   ├── __init__.py
-│   │   ├── documents.py        (Upload, list)
-│   │   ├── search.py           (Search endpoints)
-│   │   └── rag.py              (RAG endpoint)
-│   │
-│   └── utils/                  (Utilities)
-│       ├── __init__.py
-│       ├── logging.py          (Structured logging)
-│       └── decorators.py       (Custom decorators)
+│   └── routes/
+│       ├── documents.py        (upload, list, chunks, delete — admin)
+│       ├── search.py           (retrieval only)
+│       └── chat.py             (RAG, plain and streaming)
 │
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py             (Pytest fixtures)
-│   ├── test_documents.py
-│   ├── test_search.py
-│   └── test_rag.py
+├── scripts/
+│   ├── create_index.py         (IVFFlat — run AFTER ingesting)
+│   └── evaluate.py             (runs the eval set, reports two metrics)
 │
-├── docs/
-│   ├── architecture.md         (System design)
-│   ├── api.md                  (API documentation)
-│   └── deployment.md           (Deploy guides)
+├── evals/
+│   └── preguntas.json          (questions with known answers)
 │
 └── samples/
     └── sample.pdf              (Test document)
 ```
+
+> **Note.** `models/` holds a single file with both classes: they reference each
+> other, and splitting them forces a circular import or `TYPE_CHECKING` tricks.
 
 ## 🎓 Learning Path
 
@@ -562,14 +651,14 @@ Smart? Overlap chunks to preserve context
 
 ```bash
 # Check PostgreSQL is running
-docker-compose logs postgres
+docker compose logs postgres
 
 # Verify pgvector extension
-docker-compose exec postgres psql -U postgres -d rag_db \
+docker compose exec postgres psql -U postgres -d rag_db \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # Test connection
-poetry run python -c "
+uv run python -c "
 from app.database import init_db
 import asyncio
 asyncio.run(init_db())
@@ -579,15 +668,20 @@ print('✅ Database ready')
 
 ### Embedding Generation Errors
 
+Embeddings are generated **locally** by `sentence-transformers` (Mini 3), not by
+an API — `ANTHROPIC_API_KEY` is only for the answer-generation step. A failure
+here is a model-loading problem, not an auth problem.
+
 ```bash
-# Check API key
-echo $ANTHROPIC_API_KEY
+# The model is downloaded on FIRST USE and cached in ~/.cache/huggingface.
+# No network on first run = failure here.
+ls ~/.cache/huggingface/hub
 
 # Test embedding service
-poetry run python -c "
+uv run python -c "
 from app.services.embeddings import embedding_service
 import asyncio
-result = asyncio.run(embedding_service.embed_text('test'))
+result = asyncio.run(embedding_service.embed('test'))
 print(f'✅ Embedding generated: {len(result)} dimensions')
 "
 ```
@@ -596,13 +690,13 @@ print(f'✅ Embedding generated: {len(result)} dimensions')
 
 ```bash
 # Verify embeddings are stored
-docker-compose exec postgres psql -U postgres -d rag_db -c \
+docker compose exec postgres psql -U postgres -d rag_db -c \
   "SELECT COUNT(*) FROM document_chunks WHERE embedding IS NOT NULL;"
 
 # Should show count > 0
 
 # Check index exists
-docker-compose exec postgres psql -U postgres -d rag_db -c \
+docker compose exec postgres psql -U postgres -d rag_db -c \
   "SELECT * FROM pg_indexes WHERE tablename = 'document_chunks';"
 ```
 
