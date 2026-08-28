@@ -1,0 +1,46 @@
+# Ancla YAML, fuera de services: api y worker comparten imagen y config, solo
+# cambia el comando. Compose ignora las claves x-* de nivel raíz.
+x-app: &app
+  build: .
+  environment:
+    # Host "redis" (el nombre del servicio), no localhost: esto corre dentro
+    # de la red interna de Docker.
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+  depends_on:
+    redis:
+      condition: service_healthy
+  volumes:
+    - ./app:/app/app
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      # host:contenedor. ${REDIS_PORT} sale del .env de al lado.
+      - "${REDIS_PORT:-6379}:6379"
+    # AOF: la cola vive en Redis, sin persistir se pierde al reiniciar.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    <<: *app
+    # El healthcheck de la imagen apunta a :8000, que el worker no expone.
+    healthcheck:
+      disable: true
+    # -c 2: dos procesos hijo ejecutando tareas.
+    command: uv run celery -A app.celery_app worker --loglevel=info -c 2
+
+volumes:
+  redis_data:
