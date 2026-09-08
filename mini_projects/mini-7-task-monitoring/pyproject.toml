@@ -1,0 +1,36 @@
+[project]
+name = "mini-7-task-monitoring"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # El transporte de Celery se elige por extra: redis, rabbitmq, sqs...
+    # El extra [redis] arrastra el cliente `redis`, que también usamos directo
+    # en la Fase 3 para escribir la dead letter queue.
+    "celery[redis]>=5.5.3",
+    "fastapi>=0.141.1",
+    # Ya venía instalado por el extra [redis] de Celery, pero acá lo importamos
+    # nosotros directo (la dead letter queue de la Fase 3). Una dependencia que
+    # usás en un `import` va declarada, aunque otra la arrastre: si mañana Celery
+    # cambia de cliente, tu código deja de compilar sin que nadie lo haya tocado.
+    "redis>=5.2.1",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.12.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.uv]
+# No es una librería instalable, es una app: uv no intenta buildear un paquete.
+package = false
+
+[tool.pytest.ini_options]
+# Para que `import app.x` funcione en los tests sin instalar el proyecto.
+pythonpath = ["."]
+asyncio_mode = "auto"
+testpaths = ["tests"]
