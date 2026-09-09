@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     # entradas más viejas (las nuevas son las que estás debuggeando).
     DEAD_LETTER_MAX: int = 1000
 
+    # ------------------------------------------------------- Monitoreo (F5)
+
+    # Cuánto esperamos a que los workers contesten un broadcast de inspect().
+    #
+    # Este número es un presupuesto de LATENCIA, no una preferencia: es tiempo
+    # que un request HTTP se queda esperando. Demasiado bajo y perdés workers
+    # lentos (aparecen como caídos sin estarlo); demasiado alto y un cluster
+    # muerto hace que tu endpoint de monitoreo tarde eso en responder, justo
+    # cuando más rápido lo necesitás.
+    INSPECT_TIMEOUT: float = 1.0
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

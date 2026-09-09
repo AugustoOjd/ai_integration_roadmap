@@ -1,3 +1,5 @@
+import time
+
 from app.base_task import DeadLetterTask
 from app.celery_app import celery_app
 from app.exceptions import TransientError
@@ -109,4 +111,59 @@ def fetch_resource(self, resource_id: str, simulated_status: int = 200) -> dict:
         "task_id": self.request.id,
         "intentos": self.request.retries + 1,
         **recurso,
+    }
+
+
+# Cuántas veces, como máximo, reporta progreso una tarea. Cada reporte es una
+# ESCRITURA a Redis: un loop de 100.000 vueltas que reporta en cada iteración
+# convierte al backend en el cuello de botella y hace que la tarea tarde más por
+# contar su progreso que por trabajar.
+#
+# 20 reportes = saltos de 5%, suficiente para cualquier barra de progreso.
+MAX_REPORTES_DE_PROGRESO = 20
+
+
+@celery_app.task(bind=True, name="tasks.process_batch", base=DeadLetterTask)
+def process_batch(self, total_items: int) -> dict:
+    """Procesa `total_items` ítems (uno por segundo) reportando su avance.
+
+    El caso de uso real: transcodificar un video, indexar 5.000 documentos,
+    generar un reporte pesado. Sin reportes intermedios, el cliente ve STARTED
+    desde el segundo 1 hasta el final y no puede distinguir "va por la mitad"
+    de "se colgó".
+    """
+    # Cada cuántos ítems reportar. max(1, ...) evita el paso 0 cuando hay menos
+    # ítems que reportes: con total_items=5 reportamos en cada uno.
+    paso = max(1, total_items // MAX_REPORTES_DE_PROGRESO)
+
+    for procesados in range(1, total_items + 1):
+        # El "trabajo caro". El worker es un proceso normal y síncrono:
+        # bloquear acá es correcto, no congela nada más.
+        time.sleep(1)
+
+        # El `or` del final garantiza un reporte en el último ítem, aunque no
+        # caiga justo en un múltiplo del paso. Sin eso, una tarea de 23 ítems
+        # con paso 5 se quedaría mostrando 20/23 hasta terminar.
+        if procesados % paso == 0 or procesados == total_items:
+            # update_state escribe DIRECTO en el backend, pisando el estado
+            # anterior. No es un evento que se acumula: es un valor que se
+            # sobreescribe, así que el cliente siempre lee el último.
+            #
+            # "PROGRESS" no es un estado de Celery: te lo inventás vos. Celery
+            # solo distingue los estados READY (SUCCESS, FAILURE, REVOKED) del
+            # resto; cualquier otro nombre es válido y cuenta como "no terminó".
+            self.update_state(
+                state="PROGRESS",
+                # meta viaja a Redis serializado en JSON, igual que los args y
+                # el resultado. Nada de objetos que no sean JSON.
+                meta={"current": procesados, "total": total_items},
+            )
+
+    # Al retornar, Celery pisa el estado con SUCCESS y el meta con este dict.
+    # El progreso deja de existir: nadie puede leer "iba en 80%" después de que
+    # terminó, y no hace falta.
+    return {
+        "task_id": self.request.id,
+        "procesados": total_items,
+        "status": "completado",
     }

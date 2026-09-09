@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 
-from app.routes import dead_letter, tasks
+from app.routes import dead_letter, monitoring, tasks
 
 app = FastAPI(title="Mini 7 - Task Retries & Monitoring")
 
 app.include_router(tasks.router)
 app.include_router(dead_letter.router)
+app.include_router(monitoring.router)
 
 
 @app.get("/health")
