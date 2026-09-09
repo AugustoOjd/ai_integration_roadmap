@@ -1,0 +1,59 @@
+# Ancla YAML, fuera de services: api y worker comparten imagen y config, solo
+# cambia el command. El prefijo `x-` es obligatorio —es lo que hace que Compose
+# ignore la clave en vez de tratarla como un servicio—; el nombre después del
+# guion es libre, y `&monitoring-app` es el alias con el que se referencia abajo.
+x-monitoring-app: &monitoring-app
+  build: .
+  environment:
+    # Host "redis" (el nombre del servicio), no localhost: esto corre dentro de
+    # la red interna de Docker, donde el puerto siempre es el 6379.
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+    DEAD_LETTER_URL: redis://redis:6379/2
+  depends_on:
+    redis:
+      condition: service_healthy
+  volumes:
+    # Bind mount del código: editás y el --reload lo levanta sin rebuildear.
+    - ./app:/app/app
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      # host:contenedor. ${REDIS_PORT} sale del .env de al lado (6381 acá: el
+      # 6379 lo usan el mini 2 y el mini 6, y el 6380 el RAG assistant).
+      - "${REDIS_PORT:-6381}:6379"
+    # AOF: la cola y la dead letter queue viven en Redis. Sin persistir, un
+    # reinicio se lleva puestos los fallos que justamente querías conservar.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  api:
+    <<: *monitoring-app
+    ports:
+      - "8000:8000"
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    <<: *monitoring-app
+    # El healthcheck de la imagen apunta a :8000, que el worker no expone.
+    healthcheck:
+      disable: true
+    # -c 2: dos procesos hijo ejecutando tareas en paralelo.
+    #
+    # --hostname: sin esto el worker se llama "celery@<hash del contenedor>",
+    # que cambia en cada `up` y es ilegible. `inspect()` (Fase 5) devuelve un
+    # dict indexado POR ESTE NOMBRE, así que ponerlo fijo hace que la salida del
+    # monitoreo sea estable y comparable entre corridas.
+    command: >
+      uv run celery -A app.celery_app worker
+      --loglevel=info -c 2 --hostname=worker1@%h
+
+volumes:
+  redis_data:
