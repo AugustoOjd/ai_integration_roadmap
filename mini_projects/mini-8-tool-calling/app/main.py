@@ -1,6 +1,17 @@
+import logging
+
 from fastapi import FastAPI
 
+from app.routes import agent
+
+# Sin esto los `logger.info` del agente no se ven: el nivel por default de
+# Python es WARNING. En producción esto se reemplaza por logging estructurado
+# (JSON), para que las líneas sean consultables y no sólo legibles.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+
 app = FastAPI(title="Mini 8 - LLM Tool Calling")
+
+app.include_router(agent.router)
 
 
 @app.get("/health")

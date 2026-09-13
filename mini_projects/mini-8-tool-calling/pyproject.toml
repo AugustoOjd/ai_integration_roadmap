@@ -10,6 +10,9 @@ dependencies = [
     #
     # Sin pin: `uv add` / `uv lock` resuelve la última y la clava en uv.lock.
     "anthropic",
+    # Fase 8: el tercer nivel de abstracción, para comparar contra tu loop.
+    # Trae su propio cliente de Anthropic adentro; no reemplaza al de arriba.
+    "pydantic-ai",
     "fastapi>=0.141.1",
     "pydantic-settings>=2.15.0",
     "uvicorn[standard]>=0.52.4",
