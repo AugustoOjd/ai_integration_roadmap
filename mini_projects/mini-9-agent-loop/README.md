@@ -1,276 +1,359 @@
-# 🔁 Mini 9: Agent Reasoning Loop
- 
-Full agent loop with multi-step reasoning.
- 
-## 🎯 Learning Objectives
- 
-- ✅ Agent loop pattern
-- ✅ Stop conditions
-- ✅ Multi-step reasoning
-- ✅ Tool chaining
-- ✅ Max iterations safety
-- ✅ Error recovery
- 
-## 🏗️ Architecture
- 
-````
-While not done:
-  1. Send prompt + tools to LLM
-  2. LLM thinks and chooses tool(s)
-  3. Execute tool(s)
-  4. Feed result back to LLM
-  5. Check stop condition
-````
- 
-## 📚 Tech Stack
- 
-- **FastAPI** - Web framework
-- **Anthropic Claude** - LLM
-- **Tool registry** - From Mini 8
- 
+# 🔁 Mini 9: Agent Loop — sesiones, permisos y presupuesto
+
+Un agente que **recuerda**, que sabe **de quién** es el trabajo que hace, que
+**pide permiso** antes de romper algo, y que no se gasta tu presupuesto.
+
+> Escrito en castellano, como `FASES.md` y `CHECK_LEARNING.md` de los minis
+> anteriores.
+
+---
+
+## ⚠️ Lo que este mini NO es
+
+**No es "ahora sí, el agent loop de verdad".** Ese ya lo escribiste, en el mini 8:
+
+| Tema | Dónde ya está |
+|---|---|
+| El loop `while stop_reason == "tool_use"` | mini 8, Fase 3 |
+| Condiciones de parada | Fase 3 |
+| Razonamiento multi-paso y encadenar tools | Fase 3 |
+| `max_iterations` | Fase 3 (`MaxIterationsError`) |
+| Recuperación de errores de tools | Fase 6 (`is_error` + mensaje genérico) |
+| Ejecución en paralelo | Fase 6 |
+
+Repetir eso no te enseña nada nuevo. Este mini **parte de ese loop** y le agrega
+las cinco cosas que lo separan de algo que puede recibir tráfico real.
+
+El loop sigue siendo **tuyo**, no de un framework, por una razón concreta: el
+paso siguiente es PROJECT 2 (Celery + agentes), y ahí vas a necesitar meterte
+adentro del loop — persistir estado vuelta a vuelta, reportar progreso, cancelar
+a mitad de camino, sobrevivir al reinicio de un worker. Un framework dueño del
+loop complica exactamente eso.
+
+---
+
+## 🎯 Qué se aprende
+
+- ✅ **Sesiones multi-turno**: el historial persistido *entre* requests
+- ✅ **Inyección de dependencias en tools**: de quién es el dato que la tool toca
+- ✅ **Aprobación humana** para tools destructivas
+- ✅ **Presupuesto**: topes de tokens y de dinero, no sólo de iteraciones
+- ✅ **Crecimiento del contexto**: qué hacés cuando la conversación no entra
+- ✅ **`execution_log` persistido**: la traza como dato, no como `print`
+
+Los seis salen del mismo lugar: en el mini 8 cada request era un universo
+aislado y sin usuario. Acá hay conversaciones, hay dueños, y hay plata.
+
+---
+
+## 🏗️ Arquitectura
+
+```
+POST /sessions/{id}/messages
+        │
+        ▼
+  cargar historial de la sesión desde la DB      ← NUEVO: memoria
+        │
+        ▼
+  ┌─ loop (el del mini 8) ──────────────────────┐
+  │   llamar al modelo                          │
+  │   ¿pide tools?                              │
+  │      ├─ tool sensible -> PAUSAR y pedir OK  │  ← NUEVO: aprobación
+  │      └─ tool normal   -> ejecutar con deps  │  ← NUEVO: deps
+  │   guardar la vuelta en execution_log        │  ← NUEVO: traza
+  │   ¿queda presupuesto?                       │  ← NUEVO: budget
+  └─────────────────────────────────────────────┘
+        │
+        ▼
+  guardar el historial actualizado
+```
+
+---
+
+## 🧩 Qué escribís vos y qué te cubre Pydantic AI
+
+Este mini es el revés de la Fase 8 del mini 8: allá el framework era el objeto
+de estudio; acá es una herramienta que se usa **sólo donde escribirlo a mano no
+enseña nada**.
+
+| Pieza | Quién |
+|---|---|
+| El loop, el historial de una corrida, `max_iterations` | **vos** (mini 8) |
+| Qué tools existen y su seguridad | **vos** (mini 8, Fase 5) |
+| Persistir la sesión entre requests | **vos** — es tu modelo de datos |
+| Decidir qué tool necesita aprobación | **vos** — es política, no técnica |
+| Pasarle el usuario autenticado a una tool | **vos** (patrón: `RunContext`) |
+| Política de presupuesto y qué hacer al agotarlo | **vos** |
+| Recortar el historial cuando no entra | **vos** |
+| Contar tokens de un historial | `messages.count_tokens` del SDK |
+| Modelo falso para tests | **Pydantic AI** (`TestModel`) o tu fake del mini 8 |
+| Streaming del progreso al cliente | SDK (`client.messages.stream`) |
+
+La regla que sale de acá, y que vale más que el mini: **un framework te cubre el
+transporte y el contrato; las decisiones son siempre tuyas.** Todo lo que dice
+"vos" en esa tabla es política de negocio disfrazada de código.
+
+---
+
+## 📚 Stack
+
+- **FastAPI** — la API
+- **Anthropic Claude** (`claude-haiku-4-5`) — el modelo
+- **PostgreSQL + SQLAlchemy** — sesiones y `execution_log`
+- **Pydantic AI** — sólo `TestModel` en los tests
+- Registry, tools y loop **del mini 8**
+
+---
+
 ## 🚀 Quick Start
- 
+
 ```bash
-# Copy from Mini 8 + add agent executor
+cp .env.example .env        # y poné tu ANTHROPIC_API_KEY
+docker compose up -d        # postgres
+uv sync
 uv run uvicorn app.main:app --reload
 ```
- 
-## 📝 API Endpoints
- 
+
+---
+
+## 📝 Endpoints
+
 ```bash
-# Multi-step agent task
-POST /agent/execute-loop
-{
-  "prompt": "Calculate 50 + 30, then multiply by 2. Also tell me the time."
-}
- 
-Response:
-{
-  "final_answer": "50 + 30 = 80, multiplied by 2 = 160. Current time is...",
-  "iterations": 2,
-  "tools_used": ["calculate", "get_time"],
-  "execution_log": [...]
-}
+# 1. Abrir una conversación
+POST /sessions
+{"user_id": "u_42"}
+-> {"session_id": "s_abc", "budget_tokens": 50000}
+
+# 2. Mandar un mensaje (el agente recuerda lo anterior)
+POST /sessions/s_abc/messages
+{"prompt": "¿Cuánto gasté este mes?"}
+-> {
+     "answer": "Gastaste $1.240 en 8 pedidos.",
+     "iterations": 2,
+     "tools_used": ["get_my_orders", "calculate"],
+     "usage": {"input_tokens": 1830, "output_tokens": 210},
+     "budget_remaining": 47960
+   }
+
+# 3. Seguir la conversación: "esos" se resuelve con el historial
+POST /sessions/s_abc/messages
+{"prompt": "¿Y cuántos de esos fueron con descuento?"}
+
+# 4. El agente quiere hacer algo destructivo: se frena
+POST /sessions/s_abc/messages
+{"prompt": "Cancelá el pedido 991"}
+-> 202 {
+     "status": "pending_approval",
+     "pending": {"id": "toolu_7", "tool": "cancel_order",
+                 "input": {"order_id": 991}}
+   }
+
+# 5. Vos decidís
+POST /sessions/s_abc/approvals/toolu_7
+{"approved": true}
+-> {"answer": "Listo, cancelé el pedido 991."}
+
+# 6. La traza completa, para auditar
+GET /sessions/s_abc/log
 ```
- 
-## 🧠 Agent Loop Implementation
- 
+
+---
+
+## 🧠 Los cinco conceptos
+
+### 1. Memoria: la sesión es tu tabla, no del modelo
+
+La API **no guarda nada**. Eso ya lo sabías del mini 8; la consecuencia recién
+aparece acá: si querés que el agente recuerde, el historial lo guardás **vos**.
+
 ```python
-async def execute(self, prompt: str) -> dict:
-    messages = [{"role": "user", "content": prompt}]
-    iteration = 0
-    
-    while iteration < self.max_iterations:
-        iteration += 1
-        
-        # 1. Call LLM
-        response = self.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1024,
-            tools=registry.get_tools_for_api(),
-            messages=messages
-        )
-        
-        # 2. Check stop condition
-        if response.stop_reason == "end_turn":
-            # LLM decided it's done
-            return extract_text_response(response)
-        
-        # 3. Process tool calls
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                result = registry.execute(block.name, block.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": str(result)
-                })
-        
-        # 4. Feed back to LLM
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
-    
-    # Max iterations reached
-    return {"error": "Max iterations exceeded"}
+# el loop del mini 8 arrancaba siempre así:
+messages = [{"role": "user", "content": prompt}]
+
+# acá arranca así:
+messages = await load_history(session_id) + [{"role": "user", "content": prompt}]
 ```
- 
-## 📊 Execution Flow Example
- 
-````
-User: "Find flights BA→Barcelona under $800, and notify me"
- 
-Iteration 1:
-  LLM: "I need to search for flights"
-  Call: search_flights("BA", "Barcelona", 800)
-  Result: [Flights found: LATAM $750]
-  
-Iteration 2:
-  LLM: "Found flights under budget. Send notification."
-  Call: send_notification("user123", "Found LATAM $750")
-  Result: Notification sent
-  
-Iteration 3:
-  LLM: "Task complete"
-  Stop: end_turn
-  
-Final: "I found a LATAM flight for $750 and sent notification"
-````
- 
-## 🎓 Key Concepts
- 
-**Stop Reason:**
-- "end_turn": LLM finished reasoning
-- "tool_use": LLM wants to use tool(s)
-- "max_tokens": Hit token limit
- 
-**Max Iterations:**
-- Safety mechanism
-- Prevent infinite loops
-- Default: 10 iterations
- 
-**Execution Log:**
+
+Y al terminar, guardás. Todo el mini 9 cabe en esa diferencia.
+
+**Lo que se rompe**: los bloques `tool_use` y `tool_result` son parte del
+historial y hay que persistirlos tal cual. Si guardás sólo los textos —que es la
+tentación, porque es lo legible— rompés la correlación por `tool_use_id` y la
+API te rechaza el request siguiente.
+
+### 2. Dependencias: el modelo no puede decir de quién son los datos
+
+Ésta es la pregunta 48 de tu `CHECK_LEARNING.md` del mini 8, y acá se responde.
+
 ```python
-{
-  "iteration": 1,
-  "stop_reason": "tool_use",
-  "tools_called": ["search_flights"],
-  "text": "I'll search for flights..."
-}
+# ❌ el user_id como parámetro de la tool
+def get_my_orders(user_id: str) -> list[dict]: ...
 ```
- 
-## 🧪 Testing Complex Scenarios
- 
-```bash
-# Simple task (1 iteration)
-curl -X POST http://localhost:8000/agent/execute-loop \
-  -d '{"prompt": "What time is it?"}'
- 
-# Medium task (2 iterations)
-curl -X POST http://localhost:8000/agent/execute-loop \
-  -d '{"prompt": "Calculate 50 + 30, then tell me the time"}'
- 
-# Complex task (3+ iterations)
-curl -X POST http://localhost:8000/agent/execute-loop \
-  -d '{"prompt": "Search for Python, calculate 10 * 5, get time, then summarize"}'
+
+Si el `user_id` está en el schema, **lo elige el modelo** — y el modelo lo toma
+del texto del usuario. Alguien escribe *"mostrame los pedidos del usuario 7"* y
+tu tool obedece. Es un IDOR con un LLM en el medio.
+
+```python
+# ✅ el user_id viaja por afuera del modelo
+def get_my_orders(ctx: RunContext[Deps]) -> list[dict]:
+    return db.orders_for(ctx.deps.user_id)   # del token, no del prompt
 ```
- 
-## 📂 Folder Structure
- 
-````
+
+La regla: **lo que define permisos nunca va en el `input_schema`.** El modelo
+elige *qué hacer*; el contexto autenticado define *sobre qué*.
+
+### 3. Aprobación: "el modelo pide, vos ejecutás" en serio
+
+En el mini 8 esa frase era teoría: ejecutabas todo. Acá se vuelve código.
+
+```python
+REQUIEREN_APROBACION = {"cancel_order", "send_email", "refund"}
+```
+
+El loop se **pausa**: guarda el estado, devuelve 202 con el pedido pendiente, y
+espera. Cuando llega la decisión, retoma — y si fue rechazada, le manda un
+`tool_result` con `is_error` diciendo que el usuario no autorizó. El modelo lo
+entiende y sigue.
+
+**El detalle difícil**: un loop pausado es estado que sobrevive al request. No
+podés tener el `for` corriendo mientras esperás. Hay que poder reconstruir la
+corrida desde la base — que es, casualmente, el mismo problema que te va a
+plantear Celery en PROJECT 2.
+
+### 4. Presupuesto: `max_iterations` no alcanza
+
+Cinco iteraciones con historiales chicos son centavos; cinco con un historial de
+100 KB, no. El tope real se cuenta en tokens:
+
+```python
+if session.tokens_used + estimado > session.budget_tokens:
+    raise BudgetExceededError
+```
+
+Y se estima **antes** de mandar, con `client.messages.count_tokens(...)` — que es
+gratis. Contar después sirve para la factura, no para evitarla.
+
+### 5. Contexto: toda conversación larga se rompe sola
+
+Haiku 4.5 tiene 200K de ventana. Una sesión larga llega. Las tres salidas, de
+peor a mejor:
+
+| Estrategia | Qué hace | Costo |
+|---|---|---|
+| Ventana deslizante | tira los mensajes viejos | el agente "olvida" de golpe |
+| Resumen | pide al modelo que resuma y reemplaza | una llamada extra, pérdida de detalle |
+| Recorte selectivo | tira los `tool_result` viejos, guarda el texto | barato y suele alcanzar |
+
+**La trampa**: no podés borrar un `tool_use` sin borrar su `tool_result`, ni al
+revés. Vienen de a pares.
+
+---
+
+## 📂 Estructura
+
+```
 mini-9-agent-loop/
 ├── app/
 │   ├── main.py
 │   ├── config.py
-│   ├── tools.py                 # From Mini 8
-│   ├── services/
-│   │   └── agent_executor.py   # NEW: Agent loop
+│   ├── db.py                    # NUEVO: engine + sesión de SQLAlchemy
+│   ├── models.py                # NUEVO: Session, Message, ExecutionStep
+│   ├── agent.py                 # del mini 8 + memoria, deps, aprobación
+│   ├── deps.py                  # NUEVO: el contexto autenticado
+│   ├── budget.py                # NUEVO: estimación y topes
+│   ├── context.py               # NUEVO: recorte del historial
+│   ├── tools/                   # del mini 8 + tools con deps y sensibles
 │   ├── schemas/
-│   │   └── agent.py
 │   └── routes/
-│       └── agent.py             # UPDATED: Add loop endpoint
-└── pyproject.toml
-````
- 
-## 📈 Performance
- 
-**Expected:**
-- Iteration 1: ~500-1000ms (LLM call + tool)
-- Iteration 2: ~500-1000ms
-- Total for 2-3 tools: ~1-3 seconds
- 
-## ⚡ Advanced Patterns
- 
-**With Database Persistence:**
-```python
-# Save execution log
-task = Task(
-    id=task_id,
-    prompt=prompt,
-    status="running",
-    execution_log=[]
-)
-db.add(task)
- 
-# Update after each iteration
-task.execution_log.append(iteration_log)
-db.commit()
+│       ├── sessions.py          # NUEVO
+│       └── approvals.py         # NUEVO
+└── tests/
 ```
- 
-**With Error Recovery:**
-```python
-try:
-    result = registry.execute(tool_name, tool_input)
-except Exception as e:
-    # Don't break loop, inform LLM
-    tool_results.append({
-        "type": "tool_result",
-        "tool_use_id": block.id,
-        "content": f"Error: {e}",
-        "is_error": True
-    })
-    # LLM will try different approach
-```
- 
-## 🚢 Deploy
- 
-```bash
-git add .
-git commit -m "Mini 9: Agent reasoning loop"
-git push
-```
- 
-## ❓ Troubleshooting
- 
-**Agent stuck in loop?**
-```bash
-# Check max_iterations
-# Check stop_reason is "end_turn"
-# Check tool execution time
- 
-# Increase timeout if needed
-task_time_limit = 60  # seconds
-```
- 
-**Tool not executing next iteration?**
-```bash
-# Check tool_use_id is correct
-# Check tool_result structure
-# Look at message history
- 
-# Debug:
-print(f"Messages: {messages}")
-print(f"Response: {response}")
-```
- 
-## 📚 Resources
- 
-- [ReAct Pattern](https://arxiv.org/abs/2210.03629)
-- [Agent Frameworks](https://python.langchain.com/docs/modules/agents/)
-- [Anthropic Tool Use](https://docs.anthropic.com/claude/docs/tool-use)
- 
-## ⏱️ Timeline
- 
-- Setup: 20 min (from Mini 8)
-- Agent loop: 1.5 hours
-- Testing: 1 hour
-- **Total: 3-4 hours**
- 
-## ✅ Checklist
- 
-- [ ] Copy from Mini 8
-- [ ] Implement agent executor
-- [ ] Handle multi-iteration
-- [ ] Implement stop conditions
-- [ ] Add max iterations safety
-- [ ] Test simple queries
-- [ ] Test complex workflows
-- [ ] Push to GitHub
- 
-## 🎯 Next: PROJECT 2
- 
-Ready to combine Celery + Agents? Go to `../../PROYECTOS_COMPLETOS/project-2-agentic-backend/`
- 
+
 ---
- 
+
+## 🧪 Testing
+
+Misma regla que el mini 8: **ningún test llama al modelo**. Lo nuevo a cubrir:
+
+```bash
+uv run pytest -v
+```
+
+- El historial se persiste y se recarga **con** los bloques `tool_use`/`tool_result`
+- Una tool con deps usa el `user_id` del contexto y **no** uno del prompt
+- Un prompt que pide datos de otro usuario no accede a nada
+- Una tool sensible pausa el loop en vez de ejecutarse
+- Rechazar la aprobación produce un `tool_result` con `is_error`
+- El presupuesto corta **antes** de la llamada, no después
+- El recorte de contexto nunca deja un `tool_use` huérfano
+
+`TestModel` de Pydantic AI sirve acá para guionar corridas sin escribir fakes a
+mano; tu fixture `fake_model` del mini 8 también.
+
+---
+
+## ❓ Troubleshooting
+
+**"messages.N: tool_use ids were found without tool_result blocks"**
+Tu persistencia o tu recorte de contexto partió un par. Los bloques `tool_use` y
+su `tool_result` viajan juntos o no viajan.
+
+**El agente no recuerda el mensaje anterior**
+No estás cargando el historial, o lo estás guardando después de responder y
+falla en el medio. Guardá el turno completo en una transacción.
+
+**Una tool devuelve datos de otro usuario**
+El `user_id` está en el `input_schema`. Sacalo y pasalo por `deps`.
+
+**El costo se disparó**
+Mirá `input_tokens` por vuelta: si crece rápido, el problema es el historial, no
+el modelo. Ahí entra el recorte de contexto.
+
+---
+
+## ✅ Checklist
+
+- [ ] Persistir sesiones y mensajes (con los bloques de tools intactos)
+- [ ] Cargar el historial al arrancar el loop
+- [ ] Pasar el contexto autenticado a las tools por `deps`
+- [ ] Una tool que use `deps` y ningún `user_id` en su schema
+- [ ] Marcar tools sensibles y pausar el loop
+- [ ] Endpoint de aprobación que retoma la corrida
+- [ ] Presupuesto en tokens, chequeado antes de llamar
+- [ ] Estrategia de recorte de contexto que respete los pares
+- [ ] `execution_log` consultable por endpoint
+- [ ] Tests de los ocho puntos de arriba
+
+---
+
+## 📚 Recursos
+
+- [ReAct Pattern](https://arxiv.org/abs/2210.03629) — el paper del razonamiento en loop
+- [Anthropic Tool Use](https://docs.anthropic.com/claude/docs/tool-use)
+- [Token counting](https://docs.anthropic.com/en/docs/build-with-claude/token-counting)
+- [Pydantic AI — dependencies](https://ai.pydantic.dev/dependencies/)
+
+---
+
+## ⏱️ Timeline
+
+- Persistencia de sesiones: 1.5 h
+- Dependencias en tools: 1 h
+- Aprobación humana: 1.5 h
+- Presupuesto y contexto: 1 h
+- Tests: 1 h
+- **Total: 5-6 horas**
+
+---
+
+## 🎯 Next: PROJECT 2
+
+El loop pausado que guarda su estado en la base es, exactamente, el problema que
+resuelve una tarea de Celery. Seguí en
+`../../PROYECTOS_COMPLETOS/project-2-agentic-backend/`.
+
+---
+
 **Made as part of Sr Backend Roadmap** 🚀

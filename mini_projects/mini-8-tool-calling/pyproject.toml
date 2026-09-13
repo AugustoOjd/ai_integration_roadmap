@@ -1,0 +1,38 @@
+[project]
+name = "mini-8-tool-calling"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # El SDK oficial de Anthropic. Es la única forma en que este proyecto habla
+    # con el modelo: nada de `requests` a mano contra /v1/messages. El SDK trae
+    # reintentos, timeouts, tipos y excepciones tipadas que vamos a usar en la
+    # Fase 7 para mapear errores a códigos HTTP.
+    #
+    # Sin pin: `uv add` / `uv lock` resuelve la última y la clava en uv.lock.
+    "anthropic",
+    # Fase 8: el tercer nivel de abstracción, para comparar contra tu loop.
+    # Trae su propio cliente de Anthropic adentro; no reemplaza al de arriba.
+    "pydantic-ai",
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = [
+    # httpx2 (no httpx) porque es sobre lo que está construido el SDK 1.x, y es
+    # lo que usa el TestClient de FastAPI en la Fase 9.
+    "httpx2>=2.12.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.uv]
+# No es una librería instalable, es una app: uv no intenta buildear un paquete.
+package = false
+
+[tool.pytest.ini_options]
+# Para que `import app.x` funcione en los tests sin instalar el proyecto.
+pythonpath = ["."]
+asyncio_mode = "auto"
+testpaths = ["tests"]
