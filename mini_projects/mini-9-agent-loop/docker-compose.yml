@@ -1,0 +1,40 @@
+# Un solo servicio: la base. La app corre fuera de Docker (`uv run uvicorn`)
+# porque en desarrollo querés el `--reload` y el debugger apuntando a tu venv,
+# no a un contenedor.
+services:
+  postgres:
+    # Pin de versión mayor. `postgres:latest` es una bomba de tiempo: un día
+    # hacés `docker compose pull` y te encontrás con una major distinta.
+    # `alpine` porque la imagen es ~10x más chica y acá no necesitamos nada del
+    # sistema operativo de adentro.
+    image: postgres:17-alpine
+
+    environment:
+      POSTGRES_USER: mini9
+      POSTGRES_PASSWORD: mini9
+      POSTGRES_DB: mini9
+
+    ports:
+      # host:contenedor. Si ya tenés un Postgres corriendo en tu máquina, el
+      # puerto 5432 va a estar ocupado: cambiá SÓLO el número de la izquierda
+      # (por ejemplo "5433:5432") y ajustá el DATABASE_URL del .env.
+      - "5432:5432"
+
+    volumes:
+      # Volumen nombrado, no un bind mount a una carpeta del repo: los datos
+      # sobreviven a `docker compose down` (pero no a `down -v`) y no te
+      # ensucian el working tree con archivos de Postgres.
+      - pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      # Sin esto, `docker compose up -d` vuelve apenas arranca el contenedor,
+      # pero Postgres todavía está inicializando el cluster: el primer intento
+      # de conexión de la app falla con "connection refused" y parece un bug
+      # tuyo. Con healthcheck, `docker compose up --wait` espera de verdad.
+      test: ["CMD-SHELL", "pg_isready -U mini9 -d mini9"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:
