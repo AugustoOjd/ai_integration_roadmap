@@ -95,6 +95,27 @@ class Settings(BaseSettings):
     # usuario.
     DEFAULT_BUDGET_TOKENS: int = 50_000
 
+    # Precios de Haiku 4.5, en dólares por millón de tokens.
+    #
+    # Van como settings y no hardcodeados en `budget.py` porque los precios
+    # cambian, y cuando cambian querés corregir el número sin un deploy. Son
+    # dos y no uno porque entrada y salida cuestan distinto — ésa es también la
+    # razón por la que la tabla `sessions` lleva dos contadores separados.
+    PRECIO_INPUT_USD_POR_MTOK: float = 1.0
+    PRECIO_OUTPUT_USD_POR_MTOK: float = 5.0
+
+    # Techo de contexto por request, en tokens de entrada (Fase 8).
+    #
+    # Haiku 4.5 tiene 200K de ventana. Este número va deliberadamente por
+    # debajo, y no pegado: el límite del modelo incluye lo que él GENERA, y
+    # llegar justo significa que el request entra pero la respuesta se corta por
+    # falta de lugar. El margen también absorbe el error de estimación.
+    #
+    # Es un tope distinto del presupuesto aunque se midan en la misma unidad:
+    # el presupuesto es de plata y acumulativo por sesión; éste es físico y por
+    # request. El loop usa el menor de los dos.
+    CONTEXT_MAX_INPUT_TOKENS: int = 150_000
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

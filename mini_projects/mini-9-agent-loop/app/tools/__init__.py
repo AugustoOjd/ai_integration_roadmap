@@ -13,7 +13,7 @@ que sea estable: las tools se serializan antes que el system y los mensajes,
 así que reordenarlas invalida la caché de prompts entera.
 """
 
-from app.tools import calculator, clock, search  # noqa: F401
+from app.tools import calculator, clock, orders, search  # noqa: F401
 from app.tools.registry import registry
 
 __all__ = ["registry"]

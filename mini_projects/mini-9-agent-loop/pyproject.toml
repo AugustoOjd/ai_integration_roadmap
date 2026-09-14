@@ -33,9 +33,14 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    # httpx2 (no httpx) porque es sobre lo que está construido el SDK 1.x de
-    # Anthropic, y es lo que usa el TestClient de FastAPI.
+    # httpx2 es sobre lo que está construido el SDK 1.x de Anthropic.
     "httpx2>=2.12.0",
+    # httpx (el clásico) se declara aparte y explícito porque los tests lo
+    # IMPORTAN: `AsyncClient` + `ASGITransport` es como se le pegan requests a
+    # la app sin levantar un servidor. Venía de rebote como dependencia
+    # transitiva, y depender de una transitiva es depender de que el paquete de
+    # otro no cambie sus dependencias.
+    "httpx>=0.28",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]

@@ -16,14 +16,17 @@ partes que el modelo necesita.
          └─ name  (el nombre de la función)
 """
 
+import asyncio
 import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_origin
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
+
+from app.deps import RunContext
 
 
 class ToolError(Exception):
@@ -56,6 +59,15 @@ class RegisteredTool:
     # entre lo que prometés y lo que aceptás.
     input_model: type[BaseModel]
     func: Callable[..., Any]
+
+    # Fase 3: si la firma empieza con un `RunContext`, esta tool recibe el
+    # contexto autenticado al ejecutarse y ese parámetro NO aparece en el
+    # `input_schema`. El modelo no sabe que existe.
+    wants_context: bool = False
+
+    # Si la función es `async def`. Las tools que tocan la base lo son por
+    # necesidad: una `AsyncSession` no se puede usar desde otro hilo.
+    is_async: bool = False
 
     def to_param(self, *, strict: bool) -> ToolParam:
         """La forma que espera la API."""
@@ -117,11 +129,15 @@ class ToolRegistry:
             # se llama" — que es el síntoma más difícil de diagnosticar.
             raise ValueError(f"la tool {func.__name__!r} no tiene docstring")
 
+        input_model, wants_context = _input_model_for(func)
+
         self._tools[func.__name__] = RegisteredTool(
             name=func.__name__,
             description=description,
-            input_model=_input_model_for(func),
+            input_model=input_model,
             func=func,
+            wants_context=wants_context,
+            is_async=inspect.iscoroutinefunction(func),
         )
         return func
 
@@ -134,13 +150,32 @@ class ToolRegistry:
         """
         return [tool.to_param(strict=self._strict) for tool in self._tools.values()]
 
-    def execute(self, name: str, tool_input: dict[str, Any]) -> str:
-        """Valida y ejecuta. Devuelve un string, que es lo que pide tool_result."""
+    async def execute(
+        self,
+        name: str,
+        tool_input: dict[str, Any],
+        ctx: RunContext[Any] | None = None,
+    ) -> str:
+        """Valida y ejecuta. Devuelve un string, que es lo que pide tool_result.
+
+        Pasó a ser `async` en este mini por una razón concreta: las tools que
+        consultan la base necesitan la `AsyncSession`, y una AsyncSession no se
+        puede usar desde otro hilo. El mini 8 mandaba toda tool a un hilo con
+        `asyncio.to_thread`; acá cada tool va por donde corresponde según cómo
+        esté escrita, y eso lo decide el registry, no quien llama.
+        """
         tool = self._tools.get(name)
         if tool is None:
             raise UnknownToolError(
                 f"la tool {name!r} no existe. Disponibles: {sorted(self._tools)}"
             )
+
+        if tool.wants_context and ctx is None:
+            # Bug de programación, no del modelo: alguien llamó a `execute` sin
+            # contexto para una tool que lo necesita. Que reviente fuerte y acá
+            # es lo correcto — la alternativa, ejecutarla con un contexto vacío,
+            # sería consultar datos sin saber de quién son.
+            raise RuntimeError(f"la tool {name!r} necesita contexto y no se le pasó ninguno")
 
         try:
             # Acá muere el `**tool_input` a ciegas del toolbox. Antes, un campo
@@ -154,7 +189,24 @@ class ToolRegistry:
                 f"argumentos inválidos para {name!r}: {exc.errors(include_url=False)}"
             ) from exc
 
-        output = tool.func(**validated.model_dump())
+        # El contexto se antepone como primer argumento POSICIONAL, fuera de los
+        # argumentos validados. Nunca se mezcla con `validated`: eso mantiene la
+        # separación de la Fase 3 visible hasta en la llamada — lo de la
+        # izquierda lo puso el servidor, lo de la derecha lo pidió el modelo.
+        args = (ctx,) if tool.wants_context else ()
+        kwargs = validated.model_dump()
+
+        if tool.is_async:
+            # Nativa: se espera directo. Es lo que necesitan las tools que usan
+            # la `AsyncSession`.
+            output = await tool.func(*args, **kwargs)
+        else:
+            # Sincrónica: va a un hilo. `asyncio.gather` sobre llamadas
+            # sincrónicas no paraleliza nada —correrían una tras otra igual,
+            # porque nunca le devuelven el control al event loop— y peor: una
+            # tool lenta BLOQUEA el loop y congela todos los demás requests del
+            # proceso.
+            output = await asyncio.to_thread(tool.func, *args, **kwargs)
 
         # Lo que devuelve una tool entra al contexto del modelo, y el contexto
         # es texto. Un float se convierte con `str`; un dict o una lista van
@@ -164,8 +216,21 @@ class ToolRegistry:
         return json.dumps(output, ensure_ascii=False, default=str)
 
 
-def _input_model_for(func: Callable[..., Any]) -> type[BaseModel]:
+def _es_contexto(annotation: Any) -> bool:
+    """¿Esta anotación es un `RunContext`?
+
+    Hay que contemplar las dos formas en que se puede escribir: `RunContext` a
+    secas y `RunContext[AgentDeps]`. La segunda no es la clase, es un alias
+    genérico, y `get_origin` es lo que devuelve la clase de atrás.
+    """
+    return annotation is RunContext or get_origin(annotation) is RunContext
+
+
+def _input_model_for(func: Callable[..., Any]) -> tuple[type[BaseModel], bool]:
     """Construye el modelo de Pydantic a partir de la firma de la función.
+
+    Devuelve además si la tool pide contexto, porque es la misma pasada por la
+    firma la que lo descubre.
 
     `create_model` es el constructor dinámico de Pydantic: hace en runtime lo
     mismo que escribir `class CalculateInput(BaseModel): expression: str`.
@@ -174,8 +239,27 @@ def _input_model_for(func: Callable[..., Any]) -> type[BaseModel]:
     en la firma, así que también viven en un solo lugar.
     """
     fields: dict[str, Any] = {}
+    wants_context = False
 
-    for param_name, param in inspect.signature(func).parameters.items():
+    for posicion, (param_name, param) in enumerate(inspect.signature(func).parameters.items()):
+        # ------------------------------------------------- Fase 3: el contexto
+        # Acá es donde el `user_id` desaparece del contrato. Este parámetro se
+        # saltea: no genera campo, no llega al JSON Schema, y el modelo nunca se
+        # entera de que la función lo recibe.
+        #
+        # Sólo se acepta en la PRIMERA posición, y no por capricho: `execute` lo
+        # pasa posicionalmente, así que si estuviera en el medio los argumentos
+        # se desalinearían. Que la restricción falle al importar, y no en la
+        # primera llamada del modelo a esa tool, es la diferencia entre un error
+        # al arrancar y un error en producción un martes.
+        if _es_contexto(param.annotation):
+            if posicion != 0:
+                raise TypeError(
+                    f"{func.__name__}: el RunContext tiene que ser el primer parámetro"
+                )
+            wants_context = True
+            continue
+
         if param.annotation is inspect.Parameter.empty:
             # Sin anotación no hay tipo, sin tipo no hay schema, y sin schema
             # el modelo no sabe qué mandarte. Se corta al importar.
@@ -188,7 +272,7 @@ def _input_model_for(func: Callable[..., Any]) -> type[BaseModel]:
         default = ... if param.default is inspect.Parameter.empty else param.default
         fields[param_name] = (param.annotation, default)
 
-    return create_model(  # type: ignore[call-overload]
+    modelo = create_model(  # type: ignore[call-overload]
         f"{func.__name__}_input",
         # `extra="forbid"` se traduce a `additionalProperties: false` en el
         # JSON Schema, que es lo que `strict` exige. Y del lado de la
@@ -197,6 +281,7 @@ def _input_model_for(func: Callable[..., Any]) -> type[BaseModel]:
         __config__=ConfigDict(extra="forbid"),
         **fields,
     )
+    return modelo, wants_context
 
 
 # La instancia única del proceso.

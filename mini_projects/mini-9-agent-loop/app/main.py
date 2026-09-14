@@ -1,10 +1,12 @@
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.db import create_schema, engine
+from app.errors import install_error_handlers
+from app.routes import approvals, sessions
 
 # Sin esto los `logger.info` del agente no se ven: el nivel por default de
 # Python es WARNING. En producción esto se reemplaza por logging estructurado
@@ -13,13 +15,21 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lo que pasa una vez al arrancar y una vez al apagar.
 
     Es el reemplazo moderno de los viejos `@app.on_event("startup")`, y la
     diferencia no es cosmética: acá el arranque y el apagado son las dos mitades
     de una misma función, así que lo que abrís arriba del `yield` se cierra
     abajo sin que puedan desincronizarse.
+
+    El retorno se anota `AsyncGenerator` y no `AsyncIterator`: el decorador
+    necesita un GENERADOR de verdad, porque después del `yield` lo reanuda (y
+    puede meterle una excepción con `.athrow()` si el shutdown viene por un
+    error). `AsyncIterator` sólo promete `__anext__`, así que es una promesa más
+    débil que la que el decorador requiere — por eso ese overload quedó
+    deprecado. Los dos parámetros son `[YieldType, SendType]`; desde Python 3.13
+    el segundo tiene default y alcanza con `AsyncGenerator[None]`.
 
     El `engine.dispose()` del final importa más de lo que parece con `--reload`:
     cada recarga levanta un proceso nuevo, y sin el dispose las conexiones del
@@ -42,6 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Mini 9 - Agent Loop", lifespan=lifespan)
+
+# Una sola vez, sobre la app: a partir de acá las rutas se escriben sin `try`.
+install_error_handlers(app)
+
+app.include_router(sessions.router)
+app.include_router(approvals.router)
 
 
 @app.get("/health")

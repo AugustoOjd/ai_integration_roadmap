@@ -86,6 +86,64 @@ class SessionStatus(StrEnum):
     EXHAUSTED = "exhausted"
 
 
+class OrderStatus(StrEnum):
+    """Estados de un pedido. Sólo `PENDING` se puede cancelar (Fase 5)."""
+
+    PENDING = "pending"
+    SHIPPED = "shipped"
+    CANCELLED = "cancelled"
+
+
+class Order(Base):
+    """Un pedido. El dato de negocio sobre el que operan las tools.
+
+    Existe para darle a la Fase 3 algo real que proteger. El `user_id` de esta
+    tabla es lo que una tool NO puede aceptar como argumento del modelo: si
+    `get_my_orders` recibiera un `user_id` en su `input_schema`, cualquiera
+    escribiría "mostrame los pedidos del usuario 7" y la tool obedecería.
+
+    Y en la Fase 5 es lo que hace verificable la aprobación: que `cancel_order`
+    se haya frenado no se comprueba leyendo la respuesta del agente, se comprueba
+    mirando si el `status` de esta fila cambió.
+    """
+
+    __tablename__ = "orders"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: _new_id("o"))
+
+    # El dueño. Todo acceso a esta tabla filtra por acá, y el valor sale del
+    # contexto autenticado — nunca del prompt.
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+
+    item: Mapped[str] = mapped_column(String(200))
+
+    # Dinero en CENTAVOS, como entero. Nunca en float: 0.1 + 0.2 no es 0.3 en
+    # binario, y los redondeos se acumulan factura a factura hasta que la suma
+    # no cuadra. La alternativa formal es `NUMERIC`; el entero de centavos es
+    # más simple y no tiene el problema.
+    amount_cents: Mapped[int] = mapped_column(Integer)
+
+    has_discount: Mapped[bool] = mapped_column(default=False, server_default="false")
+
+    status: Mapped[OrderStatus] = mapped_column(
+        SAEnum(
+            OrderStatus,
+            native_enum=False,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        default=OrderStatus.PENDING,
+        server_default=OrderStatus.PENDING.value,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("amount_cents >= 0", name="ck_orders_amount_positive"),
+    )
+
+
 class ChatSession(Base):
     """Una conversación: quién es el dueño, cuánto puede gastar, cómo está.
 
@@ -280,6 +338,84 @@ class Message(Base):
         # orden"— y Postgres los devuelve ya ordenados, sin sort.
         UniqueConstraint("session_id", "position", name="uq_messages_session_position"),
         CheckConstraint("role in ('user', 'assistant')", name="ck_messages_role"),
+    )
+
+
+class ApprovalStatus(StrEnum):
+    """El ciclo de vida de un pedido de aprobación."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    # Se venció sin que nadie decidiera. No es lo mismo que rechazado: nadie
+    # dijo que no, simplemente ya no es razonable ejecutarlo.
+    EXPIRED = "expired"
+
+
+class PendingApproval(Base):
+    """Una tool sensible esperando el sí o el no de un humano.
+
+    Ésta es la tabla que convierte una pausa en algo real. Un loop pausado es
+    estado que sobrevive al request: no se puede tener el `for` corriendo con un
+    `await` esperando a una persona que quizás conteste mañana, porque el worker
+    se reinicia, el deploy pasa y la conexión se cae.
+
+    Guardado acá, retomar deja de ser "seguir" y pasa a ser **reconstruir**: un
+    request nuevo levanta el historial, le agrega el `tool_result` que faltaba, y
+    sigue el loop desde ahí. Que es, casualmente, el mismo problema que va a
+    plantear Celery en PROJECT 2.
+    """
+
+    __tablename__ = "pending_approvals"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+
+    # El id del bloque `tool_use` que quedó sin ejecutar. Es LA clave de todo:
+    # el historial ya tiene ese `tool_use` persistido, y cuando la decisión
+    # llegue, el `tool_result` que se arme tiene que llevar este mismo id o la
+    # API rechaza el request.
+    tool_use_id: Mapped[str] = mapped_column(String(64))
+
+    # En qué turno quedó pausada la corrida, para saber dónde retomar.
+    turn: Mapped[int] = mapped_column(Integer)
+
+    tool_name: Mapped[str] = mapped_column(String(64))
+    # Los argumentos que el modelo propuso. Se guardan para poder EJECUTARLOS
+    # después —el request de aprobación no los manda de nuevo— y para que quien
+    # aprueba pueda ver exactamente qué está aprobando.
+    tool_input: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    status: Mapped[ApprovalStatus] = mapped_column(
+        SAEnum(
+            ApprovalStatus,
+            native_enum=False,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        default=ApprovalStatus.PENDING,
+        server_default=ApprovalStatus.PENDING.value,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # Cuándo se decidió. NULL mientras está pendiente — el propio campo dice si
+    # ya pasó por una decisión, sin tener que interpretar el status.
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # El candado de idempotencia. Dos `POST` de aprobación con el mismo
+        # `tool_use_id` no pueden crear dos pendientes ni ejecutar la tool dos
+        # veces: hay una sola fila, y su `status` es el que dice si ya se
+        # decidió.
+        UniqueConstraint("session_id", "tool_use_id", name="uq_approval_session_tool_use"),
+        # La query de la Fase 6: "¿queda algo pendiente en esta sesión?".
+        Index("ix_approvals_session_status", "session_id", "status"),
     )
 
 
