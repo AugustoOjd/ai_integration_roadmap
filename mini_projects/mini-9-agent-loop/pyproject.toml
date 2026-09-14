@@ -1,0 +1,58 @@
+[project]
+name = "mini-9-agent-loop"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # El SDK oficial de Anthropic, igual que en el mini 8: es la única forma en
+    # que este proyecto habla con el modelo. Acá además lo vamos a usar para
+    # `messages.count_tokens` en la Fase 7 (presupuesto), que es una llamada
+    # gratis y sirve para NO gastar.
+    "anthropic",
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+
+    # SQLAlchemy 2.x con el extra `asyncio`, que trae `greenlet` — la pieza que
+    # le permite al ORM suspender una operación en medio de un lazy load sin
+    # bloquear el event loop. Sin ese extra, `create_async_engine` explota al
+    # importar.
+    #
+    # ¿Por qué async y no el SQLAlchemy sincrónico de siempre? Porque los
+    # endpoints de este mini pasan la mayor parte del tiempo esperando a
+    # Anthropic (segundos, no milisegundos). Un handler sincrónico ocuparía un
+    # thread del threadpool de FastAPI todo ese rato; uno async libera el worker
+    # mientras espera. Es exactamente el caso de uso donde async paga.
+    "sqlalchemy[asyncio]>=2.0",
+
+    # El driver async de Postgres. Ojo con la confusión clásica: `psycopg2` es
+    # el driver sincrónico y NO sirve acá. La URL de conexión nombra al driver
+    # explícitamente (`postgresql+asyncpg://`), así que si algún día lo cambiás,
+    # se cambia en el .env y no en el código.
+    "asyncpg>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    # httpx2 es sobre lo que está construido el SDK 1.x de Anthropic.
+    "httpx2>=2.12.0",
+    # httpx (el clásico) se declara aparte y explícito porque los tests lo
+    # IMPORTAN: `AsyncClient` + `ASGITransport` es como se le pegan requests a
+    # la app sin levantar un servidor. Venía de rebote como dependencia
+    # transitiva, y depender de una transitiva es depender de que el paquete de
+    # otro no cambie sus dependencias.
+    "httpx>=0.28",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.uv]
+# No es una librería instalable, es una app: uv no intenta buildear un paquete.
+package = false
+
+[tool.pytest.ini_options]
+# Para que `import app.x` funcione en los tests sin instalar el proyecto.
+pythonpath = ["."]
+# Los tests de este mini son casi todos async (DB + agente), así que en vez de
+# decorar cada uno con @pytest.mark.asyncio, el modo automático los detecta.
+asyncio_mode = "auto"
+testpaths = ["tests"]

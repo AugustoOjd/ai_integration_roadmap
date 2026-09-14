@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+.env
+!.env.example
+
+# Volumen de Postgres si alguna vez lo montás local en vez de en un volumen
+# nombrado de Docker.
+pgdata/
+
+# Notas personales de estudio, no parte del proyecto
+APRENDIZAJES.md
+CHECK_LEARNING.md
+QUERIES.md
