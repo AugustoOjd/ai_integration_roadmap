@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: agentic
+      POSTGRES_DB: agentic_backend
+
+    ports:
+      # host:contenedor. Si el 5432 está ocupado, cambiá sólo el de la izquierda
+      # y ajustá el DATABASE_URL del .env.
+      - "5432:5432"
+
+    volumes:
+      # Volumen nombrado: los datos sobreviven a `down`, no a `down -v`.
+      - pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      # Sin esto `up -d` vuelve antes de que Postgres acepte conexiones y el
+      # primer intento falla con "connection refused". Con healthcheck,
+      # `up --wait` espera de verdad.
+      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic_backend"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:
