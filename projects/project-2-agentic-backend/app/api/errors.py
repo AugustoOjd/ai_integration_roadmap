@@ -23,16 +23,17 @@ from anthropic import (
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from app.agent import ApprovalRequired, MaxIterationsError
-from app.budget import BudgetExceededError
-from app.repository import (
+from app.agent.budget import BudgetExceededError
+from app.agent.loop import ApprovalRequired, MaxIterationsError
+from app.agent.repository import (
     ApprovalAlreadyDecidedError,
     ApprovalExpiredError,
     ApprovalNotFoundError,
-    SessionNotFoundError,
-    SessionPausedError,
+    ConversationNotFoundError,
+    ConversationPausedError,
 )
-from app.schemas.sessions import PendingApprovalBody, PendingApprovalResponse
+from app.api.schemas.conversations import PendingApprovalBody, PendingApprovalResponse
+from app.tasks.state import TaskNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,16 @@ def install_error_handlers(app: FastAPI) -> None:
     # Que el repositorio levante en vez de devolver None es lo que permite decidir
     # el código HTTP acá arriba, con toda la información, en vez de que cada ruta
     # adivine qué significaba ese None que le llegó de tres capas más abajo.
-    @app.exception_handler(SessionNotFoundError)
-    def _sesion_no_existe(request: Request, exc: SessionNotFoundError) -> JSONResponse:
-        return _json(status.HTTP_404_NOT_FOUND, "La sesión no existe.")
+    @app.exception_handler(ConversationNotFoundError)
+    def _conversacion_no_existe(
+        request: Request, exc: ConversationNotFoundError
+    ) -> JSONResponse:
+        return _json(status.HTTP_404_NOT_FOUND, "La conversación no existe.")
+
+    # ---------------------------------------------------------------- 404
+    @app.exception_handler(TaskNotFoundError)
+    def _tarea_no_existe(request: Request, exc: TaskNotFoundError) -> JSONResponse:
+        return _json(status.HTTP_404_NOT_FOUND, "La tarea no existe.")
 
     # ---------------------------------------------------------------- 202
     # No es un error: el loop se frenó esperando que un humano autorice una tool
@@ -68,12 +76,12 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApprovalRequired)
     def _requiere_aprobacion(request: Request, exc: ApprovalRequired) -> JSONResponse:
         logger.info(
-            "202 pendiente de aprobación session=%s tools=%s",
-            exc.session_id,
+            "202 pendiente de aprobación conversation=%s tools=%s",
+            exc.conversation_id,
             [a.tool_name for a in exc.aprobaciones],
         )
         cuerpo = PendingApprovalBody(
-            session_id=exc.session_id,
+            conversation_id=exc.conversation_id,
             pending=[PendingApprovalResponse.model_validate(a) for a in exc.aprobaciones],
         )
         # mode="json" convierte los datetime a ISO 8601. Sin eso, JSONResponse
@@ -83,17 +91,17 @@ def install_error_handlers(app: FastAPI) -> None:
         )
 
     # ---------------------------------------------------------------- 409
-    # Llegó un mensaje nuevo a una sesión que espera una decisión. 409 es "tu
+    # Llegó un mensaje nuevo a una conversación que espera una decisión. 409 es "tu
     # pedido es válido pero choca con el estado actual del recurso": la resolución
     # no es reintentar, es resolver lo pendiente primero.
     #
     # Sin esto, el segundo mensaje arrancaría un turno sobre un historial con un
     # tool_use sin cerrar, y la API lo rechazaría con un 400 incomprensible.
-    @app.exception_handler(SessionPausedError)
-    def _sesion_pausada(request: Request, exc: SessionPausedError) -> JSONResponse:
+    @app.exception_handler(ConversationPausedError)
+    def _conversacion_pausada(request: Request, exc: ConversationPausedError) -> JSONResponse:
         return _json(
             status.HTTP_409_CONFLICT,
-            "La sesión está esperando una aprobación. Resolvé lo pendiente antes "
+            "La conversación está esperando una aprobación. Resolvé lo pendiente antes "
             "de mandar otro mensaje.",
         )
 
@@ -150,7 +158,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             content={
-                "detail": "La sesión se quedó sin presupuesto de tokens.",
+                "detail": "La conversación se quedó sin presupuesto de tokens.",
                 "tokens_necesarios": exc.necesarios,
                 "tokens_disponibles": exc.disponibles,
             },

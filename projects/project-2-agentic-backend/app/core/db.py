@@ -1,4 +1,4 @@
-"""Engine, fábrica de sesiones y la dependencia de base de FastAPI.
+"""Engine, fábrica de conversaciones y la dependencia de base de FastAPI.
 
 Separado de models.py: los modelos se importan sin que haya una base levantada,
 este módulo abre un pool al importarse.
@@ -11,7 +11,7 @@ from fastapi import Depends
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import settings
+from app.core.config import settings
 
 # ---------------------------------------------------------------------------
 # El engine
@@ -37,13 +37,13 @@ engine: Engine = create_engine(
 )
 
 # ---------------------------------------------------------------------------
-# La fábrica de sesiones
+# La fábrica de conversaciones
 # ---------------------------------------------------------------------------
 
 # La Session es la unidad de trabajo y no es thread-safe: se comparte la
 # fábrica, cada request y cada tarea fabrica la suya.
 # expire_on_commit=False: sin esto, tocar un atributo después de commit dispara
-# un SELECT de refresco, y si la sesión ya cerró falla con DetachedInstanceError.
+# un SELECT de refresco, y si la conversación ya cerró falla con DetachedInstanceError.
 SessionFactory = sessionmaker(
     bind=engine,
     class_=Session,
@@ -57,7 +57,7 @@ SessionFactory = sessionmaker(
 
 
 def get_db() -> Iterator[Session]:
-    """Entrega una sesión por request y la cierra pase lo que pase.
+    """Entrega una conversación por request y la cierra pase lo que pase.
 
     Es `def` y no `async def`: I/O sincrónico dentro de un `async def` corre en
     el event loop y bloquea toda la app. Declarada `def`, FastAPI la corre en su
@@ -76,7 +76,7 @@ def get_db() -> Iterator[Session]:
             # conexión, reteniendo locks.
             session.rollback()
             raise
-        # El `with` cierra la sesión, que en SQLAlchemy devuelve la conexión al
+        # El `with` cierra la conversación, que en SQLAlchemy devuelve la conexión al
         # pool (no cierra el socket).
 
 

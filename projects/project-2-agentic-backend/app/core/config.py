@@ -1,4 +1,4 @@
-from pydantic import PostgresDsn, SecretStr
+from pydantic import PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +41,28 @@ class Settings(BaseSettings):
     # Imprime todo el SQL. Ruidoso, pero es la forma más rápida de ver un N+1 o
     # un turno commiteándose en pedazos.
     DB_ECHO: bool = False
+
+    # ------------------------------------------------------------------
+    # Cola
+    # ------------------------------------------------------------------
+
+    # El broker: dónde se encolan las tareas. Bases distintas de Redis (`/0` y
+    # `/1`) para que un `FLUSHDB` sobre los resultados no se lleve la cola.
+    CELERY_BROKER_URL: RedisDsn = "redis://localhost:6379/0"  # type: ignore[assignment]
+
+    # Dónde Celery guarda el estado y el valor de retorno de cada tarea. Es un
+    # detalle de transporte, no la fuente de verdad del negocio — eso es la tabla
+    # `tasks`.
+    CELERY_RESULT_BACKEND: RedisDsn = "redis://localhost:6379/1"  # type: ignore[assignment]
+
+    # La dead letter queue. Va en una tercera base: es lo ÚNICO de Redis que no
+    # querés perder en un FLUSHDB, porque es el registro de lo que se perdió.
+    DEAD_LETTER_URL: RedisDsn = "redis://localhost:6379/2"  # type: ignore[assignment]
+    DEAD_LETTER_KEY: str = "dlq:agent"
+
+    # Techo de entradas. Una DLQ sin tope es una fuga de memoria lenta: una tarea
+    # que falla en bucle la llena sola.
+    DEAD_LETTER_MAX: int = 500
 
     # ------------------------------------------------------------------
     # Agente

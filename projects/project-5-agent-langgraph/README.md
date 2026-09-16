@@ -1,4 +1,4 @@
-# 🕸️ PROJECT 4: Agent on LangGraph
+# 🕸️ PROJECT 5: Agent on LangGraph
 
 **Project 2, rebuilt on the framework — and honest about the half it doesn't touch.**
 
@@ -9,17 +9,21 @@ of that list — and nothing at all for the other half.
 
 ## 📌 When to Start
 
-**Prerequisites:** Project 2 complete, through Phase 13.
+**Prerequisites:** Project 2 complete, and Project 4 done — you want the
+Pydantic AI comparison fresh when you start this one.
 
 ```
-Mini 6-9 → PROJECT 2 (by hand) ✅
-                    ↓
-              PROJECT 4 ← You are here
+PROJECT 3 (LangChain)  →  PROJECT 4 (Pydantic AI)  →  PROJECT 5 (LangGraph)
+   una llamada              un turno                     una corrida
 ```
 
-Project 2's Phase 13 already rewrites *one* phase on LangGraph as a taste test.
-This project is the full version: the whole agent, deployed, with the hard
-questions answered instead of noted.
+That ordering is the point, and this is the last step of it. Pydantic AI
+abstracted **a turn**: the model decides, tools run, a typed result comes back —
+and when the process dies, the run dies with it. LangGraph abstracts **a run**:
+many turns, paused, resumed, surviving a crash.
+
+Everything Project 4 told you it does *not* cover — durable state, a checkpoint,
+a pause that outlives the process — is what this one is about.
 
 ## 🎯 The Core: what LangGraph actually is
 
@@ -126,7 +130,7 @@ uv run uvicorn app.main:app --reload
 
 ## 📊 How you measure
 
-| | Project 2 | Project 4 |
+| | Project 2 | Project 5 |
 |---|---|---|
 | Lines in the agent layer | | |
 | Lines that survived unchanged | | |
@@ -167,5 +171,5 @@ are things you have to actually break to believe.
 
 **Made as part of Sr Backend Roadmap** 🚀
 
-Start: after Project 2 · Duration: 10-12 h · Result: the ability to say what a
+Start: after Project 4 · Duration: 10-12 h · Result: the ability to say what a
 framework costs, not just what it does

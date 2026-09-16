@@ -21,8 +21,8 @@ from typing import Annotated, Any
 from pydantic import Field
 from sqlalchemy import select
 
-from app.deps import AgentDeps, RunContext
-from app.models import Order, OrderStatus
+from app.agent.deps import AgentDeps, RunContext
+from app.core.models import Order, OrderStatus
 from app.tools.registry import registry
 
 

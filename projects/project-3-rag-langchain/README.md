@@ -11,14 +11,20 @@ instead of an opinion.
 
 **Prerequisites:** Project 1 complete, with its eval set passing.
 
-```
-Mini 1-5 → PROJECT 1 (by hand) ✅
-                    ↓
-              PROJECT 3 ← You are here
-```
-
 You need Project 1 finished first. Not as background reading — as the **baseline**.
 Without it this project is a LangChain tutorial; with it, it's a measurement.
+
+It is also the first of three, and the order is deliberate:
+
+```
+PROJECT 3 (LangChain)  →  PROJECT 4 (Pydantic AI)  →  PROJECT 5 (LangGraph)
+   una llamada              un turno                     una corrida
+```
+
+Each one is the previous plus state. LangChain abstracts **a call** and the
+retrieval around it — no agent, no loop, nothing that survives the request.
+Pydantic AI abstracts **a turn**. LangGraph abstracts **a run**. Doing them in
+this order means every new concept lands on top of one you already measured.
 
 ## 🎯 The Core: what LangChain actually is
 

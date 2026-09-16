@@ -28,15 +28,15 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import (
+from app.agent.policy import TTL_APROBACION
+from app.core.models import (
     ApprovalStatus,
-    ChatSession,
+    Conversation,
+    ConversationStatus,
     ExecutionStep,
     Message,
     PendingApproval,
-    SessionStatus,
 )
-from app.policy import TTL_APROBACION
 
 # Cuánto de la salida de una tool se guarda en la traza. Una tool que devuelve
 # 200 KB infla esta tabla igual que infla el contexto, con la diferencia de que
@@ -44,8 +44,8 @@ from app.policy import TTL_APROBACION
 MAX_TOOL_OUTPUT_CHARS = 2_000
 
 
-class SessionNotFoundError(LookupError):
-    """La sesión no existe. Se traduce a 404."""
+class ConversationNotFoundError(LookupError):
+    """La conversación no existe. Se traduce a 404."""
 
 
 class ApprovalNotFoundError(LookupError):
@@ -65,10 +65,10 @@ class ApprovalExpiredError(RuntimeError):
     """El pedido venció sin decisión. Se traduce a 409."""
 
 
-class SessionPausedError(RuntimeError):
-    """Llegó un mensaje a una sesión que espera una aprobación. Se traduce a 409.
+class ConversationPausedError(RuntimeError):
+    """Llegó un mensaje a una conversación que espera una aprobación. Se traduce a 409.
 
-    Error de dominio propio porque no es "no existe" ni "no es tuya": la sesión
+    Error de dominio propio porque no es "no existe" ni "no es tuya": la conversación
     existe, es tuya, y aun así este pedido no se puede atender ahora.
     """
 
@@ -119,8 +119,8 @@ def dump_blocks(content: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def load_history(db: Session, session_id: str) -> list[MessageParam]:
-    """El historial completo de una sesión, listo para `messages.create(...)`.
+def load_history(db: Session, conversation_id: str) -> list[MessageParam]:
+    """El historial completo de una conversación, listo para `messages.create(...)`.
 
     Devuelve MessageParam y no filas del ORM: quien llama es el loop, y el loop
     piensa en el vocabulario de la Messages API. Si cambia el modelo de datos,
@@ -131,7 +131,7 @@ def load_history(db: Session, session_id: str) -> list[MessageParam]:
     """
     consulta = (
         select(Message.role, Message.content)
-        .where(Message.session_id == session_id)
+        .where(Message.conversation_id == conversation_id)
         .order_by(Message.position)
     )
     filas = db.execute(consulta).all()
@@ -141,39 +141,39 @@ def load_history(db: Session, session_id: str) -> list[MessageParam]:
     return [{"role": fila.role, "content": fila.content} for fila in filas]
 
 
-def get_session(
+def get_conversation(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     *,
     user_id: str | None = None,
     for_update: bool = False,
-) -> ChatSession:
-    """Trae la sesión, o levanta SessionNotFoundError.
+) -> Conversation:
+    """Trae la conversación, o levanta ConversationNotFoundError.
 
-    Con `user_id`, el filtro por dueño va en la misma query: un session_id es
+    Con `user_id`, el filtro por dueño va en la misma query: un conversation_id es
     adivinable, y sin ese filtro cualquiera que acierte uno lee la conversación de
     otro. Y falla como "no existe" y no como "no es tuyo", para que el endpoint no
-    sea un oráculo de qué sesiones existen.
+    sea un oráculo de qué conversaciones existen.
 
     Con `for_update=True` agrega un SELECT ... FOR UPDATE, que toma un lock sobre
     la fila hasta el final de la transacción. Cierra una carrera concreta: dos
-    requests de la misma sesión a la vez leen la misma "última posición", escriben
-    ahí, y el UniqueConstraint(session_id, position) hace fallar a uno. Es un lock
-    por sesión, no global.
+    requests de la misma conversación a la vez leen la misma "última posición", escriben
+    ahí, y el UniqueConstraint(conversation_id, position) hace fallar a uno. Es un lock
+    por conversación, no global.
     """
-    consulta = select(ChatSession).where(ChatSession.id == session_id)
+    consulta = select(Conversation).where(Conversation.id == conversation_id)
     if user_id is not None:
-        consulta = consulta.where(ChatSession.user_id == user_id)
+        consulta = consulta.where(Conversation.user_id == user_id)
     if for_update:
         consulta = consulta.with_for_update()
 
-    sesion = db.execute(consulta).scalar_one_or_none()
-    if sesion is None:
-        raise SessionNotFoundError(session_id)
-    return sesion
+    conversacion = db.execute(consulta).scalar_one_or_none()
+    if conversacion is None:
+        raise ConversationNotFoundError(conversation_id)
+    return conversacion
 
 
-def next_turn(db: Session, session_id: str) -> int:
+def next_turn(db: Session, conversation_id: str) -> int:
     """Qué número de turno le toca al próximo.
 
     Se necesita antes de correr el loop porque la traza se escribe vuelta a vuelta
@@ -187,7 +187,7 @@ def next_turn(db: Session, session_id: str) -> int:
     por el FOR UPDATE de `save_turn`.
     """
     consulta = select(func.coalesce(func.max(Message.turn), 0)).where(
-        Message.session_id == session_id
+        Message.conversation_id == conversation_id
     )
     return db.execute(consulta).scalar_one() + 1
 
@@ -200,7 +200,7 @@ def next_turn(db: Session, session_id: str) -> int:
 def record_step(
     db: Session,
     *,
-    session_id: str,
+    conversation_id: str,
     turn: int,
     iteration: int,
     tool_name: str,
@@ -233,7 +233,7 @@ def record_step(
 
     db.add(
         ExecutionStep(
-            session_id=session_id,
+            conversation_id=conversation_id,
             turn=turn,
             iteration=iteration,
             tool_name=tool_name,
@@ -249,9 +249,9 @@ def record_step(
 
 
 def load_steps(
-    db: Session, session_id: str, *, limit: int = 100, before_id: int | None = None
+    db: Session, conversation_id: str, *, limit: int = 100, before_id: int | None = None
 ) -> list[ExecutionStep]:
-    """La traza de una sesión, más nueva primero.
+    """La traza de una conversación, más nueva primero.
 
     Paginada por cursor y no por OFFSET: con offset, mientras alguien pagina, un
     paso nuevo al principio corre todo hacia atrás y la página 2 repite filas de la
@@ -260,7 +260,7 @@ def load_steps(
     """
     consulta = (
         select(ExecutionStep)
-        .where(ExecutionStep.session_id == session_id)
+        .where(ExecutionStep.conversation_id == conversation_id)
         .order_by(ExecutionStep.id.desc())
         .limit(limit)
     )
@@ -270,8 +270,8 @@ def load_steps(
     return list(db.execute(consulta).scalars().all())
 
 
-def session_stats(db: Session, session_id: str) -> dict[str, Any]:
-    """Resumen agregado de la traza de una sesión.
+def conversation_stats(db: Session, conversation_id: str) -> dict[str, Any]:
+    """Resumen agregado de la traza de una conversación.
 
     Se calcula en la base con GROUP BY y no trayendo todas las filas a Python. La
     diferencia no se nota con 10 pasos y se nota mucho con 10.000 — y la versión en
@@ -287,7 +287,7 @@ def session_stats(db: Session, session_id: str) -> dict[str, Any]:
             func.coalesce(func.sum(ExecutionStep.input_tokens), 0).label("input_tokens"),
             func.coalesce(func.sum(ExecutionStep.output_tokens), 0).label("output_tokens"),
         )
-        .where(ExecutionStep.session_id == session_id)
+        .where(ExecutionStep.conversation_id == conversation_id)
         .group_by(ExecutionStep.tool_name)
         .order_by(func.count().desc())
     )
@@ -309,7 +309,7 @@ def session_stats(db: Session, session_id: str) -> dict[str, Any]:
 
 def _append_messages(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     nuevos: list[MessageParam],
     turn: int | None,
 ) -> int:
@@ -319,16 +319,16 @@ def _append_messages(
     de posiciones: duplicarla sería garantizar que un día se desincronicen, y el
     síntoma es un historial desordenado, que es un request rechazado.
 
-    Asume que quien llama ya tomó el lock sobre la sesión. Es un contrato implícito
+    Asume que quien llama ya tomó el lock sobre la conversación. Es un contrato implícito
     y por eso la función es privada.
     """
-    # Una sola query para las dos coordenadas. `coalesce` cubre la sesión vacía,
-    # donde max() devuelve NULL y no 0: sin él, el primer turno de cada sesión
+    # Una sola query para las dos coordenadas. `coalesce` cubre la conversación vacía,
+    # donde max() devuelve NULL y no 0: sin él, el primer turno de cada conversación
     # fallaría al sumarle 1 a None.
     consulta = select(
         func.coalesce(func.max(Message.position), -1),
         func.coalesce(func.max(Message.turn), 0),
-    ).where(Message.session_id == session_id)
+    ).where(Message.conversation_id == conversation_id)
     ultima_posicion, ultimo_turno = db.execute(consulta).one()
 
     # El turno puede venir dado: el loop lo reservó al empezar porque la traza lo
@@ -337,7 +337,7 @@ def _append_messages(
 
     db.add_all(
         Message(
-            session_id=session_id,
+            conversation_id=conversation_id,
             turn=turno,
             position=ultima_posicion + offset,
             role=mensaje["role"],
@@ -350,7 +350,7 @@ def _append_messages(
 
 def pause_turn(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     nuevos: list[MessageParam],
     *,
     turn: int,
@@ -365,30 +365,30 @@ def pause_turn(
       1. El turno hasta acá, incluido el mensaje del assistant con los bloques
          tool_use que no se ejecutaron.
       2. Una fila por tool sensible pendiente.
-      3. El estado de la sesión en pending_approval.
+      3. El estado de la conversación en pending_approval.
 
     Que sean atómicas es todo: si el historial se guardara y los pendientes no,
-    quedaría una sesión ACTIVA con un tool_use huérfano, y el turno siguiente le
+    quedaría una conversación ACTIVA con un tool_use huérfano, y el turno siguiente le
     mandaría a la API un request inválido.
 
     Esto persiste un tool_use sin su tool_result, que es justo lo que la regla del
     historial prohíbe. No es una contradicción sino una precisión del invariante:
-    lo que vale no es "el historial nunca tiene pares abiertos" sino "una sesión
-    ACTIVA tiene un historial válido". Una sesión en pending_approval no es válida
+    lo que vale no es "el historial nunca tiene pares abiertos" sino "una conversación
+    ACTIVA tiene un historial válido". Una conversación en pending_approval no es válida
     para mandarle a la API, y por eso rechaza mensajes nuevos con 409.
 
     La alternativa sería no persistir el turno y guardar el `messages` entero como
     JSON dentro del pendiente. Es peor: duplica el historial en dos lugares con
     formatos distintos, y el día que difieran no vas a saber cuál vale.
     """
-    sesion = get_session(db, session_id, for_update=True)
+    conversacion = get_conversation(db, conversation_id, for_update=True)
 
-    turno = _append_messages(db, session_id, nuevos, turn)
+    turno = _append_messages(db, conversation_id, nuevos, turn)
 
     ahora = datetime.now(UTC)
     aprobaciones = [
         PendingApproval(
-            session_id=session_id,
+            conversation_id=conversation_id,
             tool_use_id=tool_use_id,
             turn=turno,
             tool_name=tool_name,
@@ -400,36 +400,38 @@ def pause_turn(
     db.add_all(aprobaciones)
 
     # Mientras el estado diga esto, mandar un mensaje devuelve 409.
-    sesion.status = SessionStatus.PENDING_APPROVAL
+    conversacion.status = ConversationStatus.PENDING_APPROVAL
 
     # Los tokens ya gastados se cobran igual: el modelo trabajó, que la corrida
     # haya quedado en pausa no se lo devuelve nadie.
-    sesion.input_tokens_used += input_tokens
-    sesion.output_tokens_used += output_tokens
+    conversacion.input_tokens_used += input_tokens
+    conversacion.output_tokens_used += output_tokens
 
     db.commit()
     return aprobaciones
 
 
 def pendientes_de(
-    db: Session, session_id: str, *, only_pending: bool = True
+    db: Session, conversation_id: str, *, only_pending: bool = True
 ) -> list[PendingApproval]:
-    """Las aprobaciones de una sesión. Por default, sólo las que siguen abiertas."""
-    consulta = select(PendingApproval).where(PendingApproval.session_id == session_id)
+    """Las aprobaciones de una conversación. Por default, sólo las que siguen abiertas."""
+    consulta = select(PendingApproval).where(
+        PendingApproval.conversation_id == conversation_id
+    )
     if only_pending:
         consulta = consulta.where(PendingApproval.status == ApprovalStatus.PENDING)
     return list(db.execute(consulta.order_by(PendingApproval.id)).scalars().all())
 
 
-def get_pending(db: Session, session_id: str, tool_use_id: str) -> PendingApproval:
+def get_pending(db: Session, conversation_id: str, tool_use_id: str) -> PendingApproval:
     """Trae un pedido de aprobación concreto, o levanta.
 
-    Se busca por (session_id, tool_use_id) y no por un id propio de la fila porque
+    Se busca por (conversation_id, tool_use_id) y no por un id propio de la fila porque
     ése es el identificador que el cliente tiene: se lo dimos en el 202, y es el
     mismo que va a llevar el tool_result cuando se arme.
     """
     consulta = select(PendingApproval).where(
-        PendingApproval.session_id == session_id,
+        PendingApproval.conversation_id == conversation_id,
         PendingApproval.tool_use_id == tool_use_id,
     )
     aprobacion = db.execute(consulta).scalar_one_or_none()
@@ -440,12 +442,12 @@ def get_pending(db: Session, session_id: str, tool_use_id: str) -> PendingApprov
 
 def resume_turn(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     mensaje_resultados: MessageParam,
     *,
     turn: int,
 ) -> None:
-    """Cierra la pausa: guarda los tool_result y reactiva la sesión.
+    """Cierra la pausa: guarda los tool_result y reactiva la conversación.
 
     Es una unidad de trabajo propia y commitea sola. Cuando se aprueba,
     `cancel_order` corre y hace flush: el pedido queda cancelado en esta
@@ -459,20 +461,20 @@ def resume_turn(
     No toca expires_at ni el status del pendiente: eso ya lo hizo quien decidió, en
     esta misma transacción.
     """
-    sesion = get_session(db, session_id, for_update=True)
+    conversacion = get_conversation(db, conversation_id, for_update=True)
 
-    _append_messages(db, session_id, [mensaje_resultados], turn)
+    _append_messages(db, conversation_id, [mensaje_resultados], turn)
 
-    # El historial volvió a tener todos sus pares cerrados, así que la sesión ya
+    # El historial volvió a tener todos sus pares cerrados, así que la conversación ya
     # puede recibir mensajes.
-    sesion.status = SessionStatus.ACTIVE
+    conversacion.status = ConversationStatus.ACTIVE
 
     db.commit()
 
 
 def save_turn(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     nuevos: list[MessageParam],
     *,
     turn: int | None = None,
@@ -486,7 +488,7 @@ def save_turn(
 
     Que sea una transacción es el punto: si commiteás mensaje por mensaje y el
     proceso muere en el medio, dejás persistido un tool_use sin su tool_result. Esa
-    sesión no queda incompleta, queda ROTA para siempre, porque cada request futuro
+    conversación no queda incompleta, queda ROTA para siempre, porque cada request futuro
     le manda a la API un historial inválido. No hay reintento que la arregle.
 
     Los tokens del turno se acumulan acá adentro, en la misma transacción, por la
@@ -495,16 +497,16 @@ def save_turn(
     """
     # El lock se toma ANTES de leer las posiciones: entre el SELECT max(...) y el
     # INSERT hay una ventana, y este lock es lo que la cierra.
-    sesion = get_session(db, session_id, for_update=True)
+    conversacion = get_conversation(db, conversation_id, for_update=True)
 
-    turno = _append_messages(db, session_id, nuevos, turn)
+    turno = _append_messages(db, conversation_id, nuevos, turn)
 
     # Acumular con += en Python en vez de un UPDATE ... SET x = x + n es correcto
     # sólo porque el FOR UPDATE de arriba serializó a los escritores de esta
-    # sesión. Sin ese lock sería un lost update clásico: dos transacciones leen
+    # conversación. Sin ese lock sería un lost update clásico: dos transacciones leen
     # 100, las dos escriben 150, y se perdió un turno de gasto.
-    sesion.input_tokens_used += input_tokens
-    sesion.output_tokens_used += output_tokens
+    conversacion.input_tokens_used += input_tokens
+    conversacion.output_tokens_used += output_tokens
 
     db.commit()
     return turno

@@ -17,13 +17,13 @@ from anthropic import Anthropic
 from anthropic.types import MessageParam, ToolParam, Usage
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.models import ChatSession, SessionStatus
-from app.repository import get_session
+from app.agent.repository import get_conversation
+from app.core.config import settings
+from app.core.models import Conversation, ConversationStatus
 
 
 class BudgetExceededError(RuntimeError):
-    """La sesión se quedó sin presupuesto. Se traduce a 402.
+    """La conversación se quedó sin presupuesto. Se traduce a 402.
 
     Lleva los números adentro: un "sin presupuesto" a secas obliga a quien lo
     recibe a adivinar si le faltan 100 tokens o 100.000.
@@ -68,7 +68,7 @@ def estimar(
     return cuenta.input_tokens
 
 
-def verificar(sesion: ChatSession, *, estimado: int, gastado_en_vuelo: int = 0) -> None:
+def verificar(conversacion: Conversation, *, estimado: int, gastado_en_vuelo: int = 0) -> None:
     """¿Entra este request en lo que queda? Si no, levanta.
 
     `gastado_en_vuelo` son los tokens que este turno ya consumió pero que todavía
@@ -77,16 +77,18 @@ def verificar(sesion: ChatSession, *, estimado: int, gastado_en_vuelo: int = 0) 
     término, un turno de muchas vueltas se pasa del presupuesto porque cada
     chequeo mira un contador viejo.
     """
-    disponibles = sesion.budget_tokens - sesion.input_tokens_used - gastado_en_vuelo
+    disponibles = (
+        conversacion.budget_tokens - conversacion.input_tokens_used - gastado_en_vuelo
+    )
 
     if estimado > disponibles:
         raise BudgetExceededError(necesarios=estimado, disponibles=max(0, disponibles))
 
 
 def marcar_agotada(
-    db: Session, session_id: str, *, input_tokens: int, output_tokens: int
+    db: Session, conversation_id: str, *, input_tokens: int, output_tokens: int
 ) -> None:
-    """Cobra lo que este turno alcanzó a gastar y deja la sesión agotada.
+    """Cobra lo que este turno alcanzó a gastar y deja la conversación agotada.
 
     Se llama en el camino de fallo, donde `save_turn` nunca va a correr. Sin
     esto, un turno que se pasa del presupuesto en la vuelta 3 saldría gratis: el
@@ -94,13 +96,13 @@ def marcar_agotada(
     gasto. Es el caso en el que más se gasta.
 
     `exhausted` no es transitorio: reintentar no lo arregla, hace falta subir el
-    presupuesto o abrir otra sesión. Por eso la sesión deja de aceptar mensajes
+    presupuesto o abrir otra conversación. Por eso la conversación deja de aceptar mensajes
     en vez de fallar una y otra vez.
     """
-    sesion = get_session(db, session_id, for_update=True)
-    sesion.input_tokens_used += input_tokens
-    sesion.output_tokens_used += output_tokens
-    sesion.status = SessionStatus.EXHAUSTED
+    conversacion = get_conversation(db, conversation_id, for_update=True)
+    conversacion.input_tokens_used += input_tokens
+    conversacion.output_tokens_used += output_tokens
+    conversacion.status = ConversationStatus.EXHAUSTED
     db.commit()
 
 

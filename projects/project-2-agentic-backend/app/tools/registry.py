@@ -23,7 +23,7 @@ from typing import Any, get_origin
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
-from app.deps import RunContext
+from app.agent.deps import RunContext
 
 
 class ToolError(Exception):

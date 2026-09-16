@@ -25,5 +25,24 @@ services:
       timeout: 3s
       retries: 15
 
+  redis:
+    image: redis:7-alpine
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      # Redis acá es el broker: si se reinicia sin persistencia, las tareas
+      # encoladas y todavía no tomadas se pierden. Con los defaults de la imagen
+      # hay snapshots RDB, que alcanzan para desarrollo.
+      - redisdata:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
 volumes:
   pgdata:
+  redisdata:

@@ -1,7 +1,7 @@
 """Toda conversación larga se rompe sola.
 
 Haiku 4.5 tiene 200K de ventana, no 1M. Con el historial completo viajando en
-cada vuelta y en cada turno, una sesión larga llega antes de lo que parece.
+cada vuelta y en cada turno, una conversación larga llega antes de lo que parece.
 
 Las tres salidas, de peor a mejor:
 

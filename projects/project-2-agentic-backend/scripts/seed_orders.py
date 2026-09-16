@@ -10,8 +10,8 @@ ignora el filtro por dueño se vería bien: hace falta tener datos ajenos para q
 
 from sqlalchemy import delete, select
 
-from app.db import SessionFactory, engine
-from app.models import Order, OrderStatus
+from app.core.db import SessionFactory, engine
+from app.core.models import Order, OrderStatus
 
 PEDIDOS = [
     # El usuario con el que vas a probar.

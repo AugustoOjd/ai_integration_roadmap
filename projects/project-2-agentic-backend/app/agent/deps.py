@@ -37,7 +37,7 @@ class AgentDeps:
     # Del token de autenticación. Nunca del prompt, nunca del body.
     user_id: str
 
-    session_id: str
+    conversation_id: str
 
     # La conexión a la base. Explícita y no global, por lo mismo que en FastAPI:
     # es lo que hace testeable una tool contra una base de prueba sin

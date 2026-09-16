@@ -1,6 +1,6 @@
 """Punto de entrada de Alembic: de dónde saca la URL y contra qué compara.
 
-Importa `app.models` para que todas las clases queden registradas en
+Importa `app.core.models` para que todas las clases queden registradas en
 `Base.metadata` antes del autogenerate. Un modelo que no se importe acá es un
 modelo que el autogenerate no ve y una tabla que la migración no crea.
 """
@@ -10,8 +10,8 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.config import settings
-from app.models import Base
+from app.core.config import settings
+from app.core.models import Base
 
 config = context.config
 

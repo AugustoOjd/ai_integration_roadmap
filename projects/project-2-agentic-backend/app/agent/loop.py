@@ -14,18 +14,16 @@ from typing import Any
 from anthropic.types import Message, MessageParam, ToolUseBlock, Usage
 from sqlalchemy.orm import Session
 
-from app.budget import BudgetExceededError, estimar, marcar_agotada, verificar
-from app.config import settings
-from app.context import ajustar
-from app.deps import AgentDeps, RunContext
-from app.llm import get_client
-from app.models import ApprovalStatus, PendingApproval, SessionStatus
-from app.policy import requiere_aprobacion
-from app.repository import (
+from app.agent.budget import BudgetExceededError, estimar, marcar_agotada, verificar
+from app.agent.context import ajustar
+from app.agent.deps import AgentDeps, RunContext
+from app.agent.llm import get_client
+from app.agent.policy import requiere_aprobacion
+from app.agent.repository import (
     ApprovalAlreadyDecidedError,
     ApprovalExpiredError,
     get_pending,
-    get_session,
+    get_conversation,
     load_history,
     next_turn,
     pause_turn,
@@ -34,6 +32,8 @@ from app.repository import (
     resume_turn,
     save_turn,
 )
+from app.core.config import settings
+from app.core.models import ApprovalStatus, PendingApproval, ConversationStatus
 
 # Importar app.tools es lo que dispara los decoradores y llena el registry.
 from app.tools import registry
@@ -64,11 +64,11 @@ class ApprovalRequired(Exception):
     volver a consultar la base.
     """
 
-    def __init__(self, session_id: str, aprobaciones: list[PendingApproval]) -> None:
-        self.session_id = session_id
+    def __init__(self, conversation_id: str, aprobaciones: list[PendingApproval]) -> None:
+        self.conversation_id = conversation_id
         self.aprobaciones = aprobaciones
         super().__init__(
-            f"la sesión {session_id} espera aprobación de "
+            f"la conversación {conversation_id} espera aprobación de "
             f"{[a.tool_name for a in aprobaciones]}"
         )
 
@@ -102,7 +102,7 @@ class AgentResult:
 
 def run_agent(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     prompt: str,
     deps: AgentDeps,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -111,21 +111,21 @@ def run_agent(
     # El número de turno se reserva antes de arrancar porque la traza se escribe
     # vuelta a vuelta y cada paso tiene que decir a qué turno pertenece, mucho
     # antes de que save_turn exista para asignarlo.
-    turno = next_turn(db, session_id)
+    turno = next_turn(db, conversation_id)
 
     # La Messages API es stateless: no guarda nada entre requests, no tiene noción
-    # de conversación, no hay un session_id que mandarle. Si el agente recuerda
+    # de conversación, no hay un conversation_id que mandarle. Si el agente recuerda
     # algo es porque vos se lo volvés a contar entero en cada llamada.
     #
     # De ahí el costo que se ve en los logs: el historial viaja completo en cada
     # vuelta y en cada turno, así que input_tokens crece sin parar. No es un bug,
     # es el precio de la memoria.
-    historial = load_history(db, session_id)
+    historial = load_history(db, conversation_id)
     nuevo_mensaje: MessageParam = {"role": "user", "content": prompt}
 
     return _correr_loop(
         db,
-        session_id,
+        conversation_id,
         deps,
         turno=turno,
         messages=[*historial, nuevo_mensaje],
@@ -139,7 +139,7 @@ def run_agent(
 
 def _correr_loop(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     deps: AgentDeps,
     *,
     turno: int,
@@ -167,7 +167,7 @@ def _correr_loop(
 
     # Se lee una vez, fuera del loop: los contadores de la fila no cambian durante
     # el turno (se persisten al final) y lo que sí cambia se lleva en `result`.
-    sesion = get_session(db, session_id)
+    conversacion = get_conversation(db, conversation_id)
 
     tools = registry.to_params()
 
@@ -179,7 +179,12 @@ def _correr_loop(
         # corto.
         limite = min(
             settings.CONTEXT_MAX_INPUT_TOKENS,
-            max(0, sesion.budget_tokens - sesion.input_tokens_used - result.input_tokens),
+            max(
+                0,
+                conversacion.budget_tokens
+                - conversacion.input_tokens_used
+                - result.input_tokens,
+            ),
         )
 
         def medir(candidatos: list[MessageParam]) -> int:
@@ -195,14 +200,14 @@ def _correr_loop(
         messages, estimado = ajustar(messages, limite=limite, medir=medir)
 
         try:
-            verificar(sesion, estimado=estimado, gastado_en_vuelo=result.input_tokens)
+            verificar(conversacion, estimado=estimado, gastado_en_vuelo=result.input_tokens)
         except BudgetExceededError:
             # Se cobra lo que este turno alcanzó a gastar. Sin esto, un turno que se
             # pasa en la vuelta 3 saldría gratis: el modelo trabajó dos vueltas, el
             # historial no se guarda, y nadie registra ese gasto.
             marcar_agotada(
                 db,
-                session_id,
+                conversation_id,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
             )
@@ -256,12 +261,12 @@ def _correr_loop(
 
             # Un solo save_turn, con el turno entero, en una transacción, y sólo en
             # el camino feliz. Si el loop no converge, más abajo levanta y no se
-            # guarda nada: la sesión queda como estaba. Persistir un turno a medias
+            # guarda nada: la conversación queda como estaba. Persistir un turno a medias
             # dejaría al modelo arrancando el siguiente desde un estado que él nunca
             # vio resuelto.
             save_turn(
                 db,
-                session_id,
+                conversation_id,
                 nuevos,
                 # El mismo número que usó la traza. Si save_turn lo recalculara por
                 # su cuenta podrían discrepar, y el log diría "turno 3" mientras los
@@ -297,15 +302,15 @@ def _correr_loop(
         sensibles = [call for call in calls if requiere_aprobacion(call.name)]
         if sensibles:
             logger.info(
-                "pausando session=%s turno=%d por %s",
-                session_id,
+                "pausando conversation=%s turno=%d por %s",
+                conversation_id,
                 turno,
                 [call.name for call in sensibles],
             )
 
             aprobaciones = pause_turn(
                 db,
-                session_id,
+                conversation_id,
                 nuevos,
                 turn=turno,
                 pendientes=[(c.id, c.name, dict(c.input)) for c in sensibles],
@@ -317,7 +322,7 @@ def _correr_loop(
             # AgentResult, un caller que se olvida de chequearlo devuelve una
             # respuesta vacía como si fuera un turno normal y el bug es silencioso.
             # Con una excepción, olvidarse es imposible.
-            raise ApprovalRequired(session_id, aprobaciones)
+            raise ApprovalRequired(conversation_id, aprobaciones)
 
         # Los nombres se registran antes de ejecutar, en el orden original de los
         # bloques: así tools_used dice qué pidió el modelo y no en qué orden
@@ -362,7 +367,7 @@ def _correr_loop(
     # pasar por final — eso es peor que un error, porque es un error que no se ve.
     #
     # Acá no se guardó nada: save_turn sólo se llama en el camino feliz, así que el
-    # historial queda como estaba y el usuario puede reintentar sobre una sesión
+    # historial queda como estaba y el usuario puede reintentar sobre una conversación
     # sana.
     raise MaxIterationsError(
         f"el agente no convergió en {max_iterations} iteraciones "
@@ -372,7 +377,7 @@ def _correr_loop(
 
 def resume_run(
     db: Session,
-    session_id: str,
+    conversation_id: str,
     tool_use_id: str,
     *,
     approved: bool,
@@ -393,14 +398,14 @@ def resume_run(
     # El lock se toma primero y se sostiene toda la decisión: leer el pendiente,
     # marcarlo y ejecutar la tool tienen que ser atómicos respecto de otro request
     # que llegue con la misma decisión.
-    sesion = get_session(db, session_id, for_update=True)
+    conversacion = get_conversation(db, conversation_id, for_update=True)
 
-    if sesion.status is not SessionStatus.PENDING_APPROVAL:
-        # Aprobar algo en una sesión que no espera nada es un conflicto de estado, no
+    if conversacion.status is not ConversationStatus.PENDING_APPROVAL:
+        # Aprobar algo en una conversación que no espera nada es un conflicto de estado, no
         # un "no encontrado".
-        raise ApprovalAlreadyDecidedError(session_id)
+        raise ApprovalAlreadyDecidedError(conversation_id)
 
-    aprobacion = get_pending(db, session_id, tool_use_id)
+    aprobacion = get_pending(db, conversation_id, tool_use_id)
 
     # El status de la fila ES el candado. No alcanza con que el endpoint sea
     # cuidadoso: dos clicks, un reintento de red o un cliente con retry automático
@@ -421,12 +426,12 @@ def resume_run(
     # ¿Queda algo más por decidir en este turno? Un turno puede haber pedido dos
     # tools sensibles, y los tool_result van todos en un mensaje: no se puede
     # retomar hasta que estén todas resueltas.
-    restantes = [p for p in pendientes_de(db, session_id) if p.tool_use_id != tool_use_id]
+    restantes = [p for p in pendientes_de(db, conversation_id) if p.tool_use_id != tool_use_id]
     if restantes:
         db.commit()
-        raise ApprovalRequired(session_id, restantes)
+        raise ApprovalRequired(conversation_id, restantes)
 
-    historial = load_history(db, session_id)
+    historial = load_history(db, conversation_id)
     turno = aprobacion.turn
     ctx = RunContext(deps=deps, turn=turno, iteration=0)
 
@@ -444,7 +449,7 @@ def resume_run(
     for call in abiertos:
         if call.id == tool_use_id and not approved:
             # No se borra el tool_use del historial: eso rompería el par y dejaría la
-            # sesión inservible. Se le contesta con un tool_result marcado como error,
+            # conversación inservible. Se le contesta con un tool_result marcado como error,
             # igual que cualquier fallo de tool, y el modelo lo entiende — en la vuelta
             # siguiente le explica al usuario que no se hizo, o propone otra cosa.
             texto = (
@@ -454,7 +459,7 @@ def resume_run(
             resultados.append(_result_block(call.id, texto, is_error=True))
             record_step(
                 db,
-                session_id=session_id,
+                conversation_id=conversation_id,
                 turn=turno,
                 iteration=0,
                 tool_name=call.name,
@@ -470,15 +475,17 @@ def resume_run(
 
     # Commit: la decisión, el efecto de la tool y el tool_result que lo registra,
     # juntos. Ver la nota en resume_turn.
-    resume_turn(db, session_id, mensaje_resultados, turn=turno)
+    resume_turn(db, conversation_id, mensaje_resultados, turn=turno)
 
-    logger.info("retomando session=%s turno=%d aprobada=%s", session_id, turno, approved)
+    logger.info(
+        "retomando conversation=%s turno=%d aprobada=%s", conversation_id, turno, approved
+    )
 
     # Y de vuelta al mismo loop, con el historial ya completo. Para _correr_loop esto
     # es indistinguible de un turno normal.
     return _correr_loop(
         db,
-        session_id,
+        conversation_id,
         deps,
         turno=turno,
         messages=[*historial, mensaje_resultados],
@@ -511,7 +518,7 @@ def _run_tool(
     def dejar_traza(salida: str, *, es_error: bool) -> None:
         record_step(
             ctx.deps.db,
-            session_id=ctx.deps.session_id,
+            conversation_id=ctx.deps.conversation_id,
             turn=ctx.turn,
             iteration=ctx.iteration,
             tool_name=call.name,

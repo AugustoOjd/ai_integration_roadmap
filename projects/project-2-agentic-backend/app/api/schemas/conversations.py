@@ -1,4 +1,4 @@
-"""El contrato HTTP de las sesiones.
+"""El contrato HTTP de las conversaciones.
 
 Los schemas son la frontera entre lo que el mundo puede mandarte y lo que tu
 código asume. Todo lo que cruza esta capa está validado; nada de lo que sale
@@ -10,14 +10,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import SessionStatus
+from app.core.models import ConversationStatus
 
 # No hay un CreateSessionRequest con user_id en el body, y su ausencia es el
 # punto: un identificador de usuario que el cliente elige es uno que el cliente
 # puede falsificar. El dueño sale del contexto autenticado.
 
 
-class SessionResponse(BaseModel):
+class ConversationResponse(BaseModel):
     """El estado de una conversación."""
 
     # Deja que Pydantic lea atributos de un objeto del ORM además de dicts, y hace
@@ -25,9 +25,9 @@ class SessionResponse(BaseModel):
     # existe en la tabla y no aparece acá porque nadie afuera necesita ese detalle.
     model_config = ConfigDict(from_attributes=True)
 
-    session_id: str
+    conversation_id: str
     user_id: str
-    status: SessionStatus
+    status: ConversationStatus
     budget_tokens: int
     budget_remaining: int
     created_at: datetime
@@ -86,7 +86,7 @@ class PendingApprovalBody(BaseModel):
     """El cuerpo del 202. No es la respuesta del agente: es un pedido de permiso."""
 
     status: str = "pending_approval"
-    session_id: str
+    conversation_id: str
     pending: list[PendingApprovalResponse]
 
 
@@ -115,8 +115,8 @@ class ExecutionStepResponse(BaseModel):
     created_at: datetime
 
 
-class SessionStats(BaseModel):
-    """El resumen de una sesión: lo que mirás antes de leer paso por paso."""
+class ConversationStats(BaseModel):
+    """El resumen de una conversación: lo que mirás antes de leer paso por paso."""
 
     total_steps: int
     failed_steps: int
@@ -137,7 +137,7 @@ class LogResponse(BaseModel):
 
     steps: list[ExecutionStepResponse]
     next_before_id: int | None
-    stats: SessionStats
+    stats: ConversationStats
 
 
 class TurnResponse(BaseModel):

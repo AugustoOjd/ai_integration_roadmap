@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.db import engine
-from app.errors import install_error_handlers
-from app.routes import approvals, sessions
+from app.api.errors import install_error_handlers
+from app.api.routes import approvals, conversations, tasks
+from app.core.db import engine
 
 # Sin esto los logger.info del agente no se ven: el nivel por default de Python es
 # WARNING. En producción esto se reemplaza por logging estructurado (JSON), para
@@ -37,8 +37,9 @@ app = FastAPI(title="Project 2 - Agentic Backend", lifespan=lifespan)
 # Una sola vez, sobre la app: a partir de acá las rutas se escriben sin `try`.
 install_error_handlers(app)
 
-app.include_router(sessions.router)
+app.include_router(conversations.router)
 app.include_router(approvals.router)
+app.include_router(tasks.router)
 
 
 @app.get("/health")

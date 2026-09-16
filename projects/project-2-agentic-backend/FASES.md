@@ -28,9 +28,7 @@ podés devolver nada y que se puede morir en cualquier momento.**
 | 8 | El worker que muere: heartbeat y reaper | 5, 7 |
 | 9 | Aprobación sin nadie mirando | 3, 8 |
 | 10 | Presupuesto por usuario, no por sesión | 3 |
-| 11 | Tests + CHECK_LEARNING | todas |
-| 12 | Monitoring, Docker, CI, deploy | 11 |
-| 13 | La comparación: reescribir una fase con Pydantic AI y con LangGraph | todas |
+| 11 | Verificación manual completa + CHECK_LEARNING | todas |
 
 ---
 
@@ -92,9 +90,18 @@ construir, entendés *por qué* esa pieza existe en vez de aprender su API. Y en
 varias fases la respuesta honesta es "no lo cubre ninguno de los dos", que es
 justamente lo que hace que este proyecto valga la pena.
 
-Los conceptos que se citan (checkpointer, `interrupt`, `RunContext`,
-`UsageLimits`) son estables. Los nombres exactos de la API conviene verificarlos
-contra la documentación al llegar a la Fase 13; ambas librerías se mueven rápido.
+**Son notas al margen, no una fase.** Este proyecto se hace entero a mano y
+termina en la Fase 12. Las reescrituras con framework son proyectos propios, y
+van en este orden:
+
+    PROJECT 3 (LangChain)  →  PROJECT 4 (Pydantic AI)  →  PROJECT 5 (LangGraph)
+       una llamada              un turno                     una corrida
+
+El 4 reescribe tu capa `app/agent/`; el 5 reescribe las fases de persistencia,
+pausa y recuperación. Los conceptos que se citan acá (checkpointer, `interrupt`,
+`RunContext`, `UsageLimits`) son estables; los nombres exactos de la API
+conviene verificarlos al llegar a esos proyectos, porque ambas librerías se
+mueven rápido.
 
 ---
 
@@ -136,7 +143,8 @@ en su threadpool y cada uno tiene su thread. Es un cambio de una palabra por
 endpoint y es el que más se olvida.
 
 Lo demás se copia con el cerebro apagado. El primer commit tiene que ser "mini 9
-andando en sincrónico, con sus tests en verde": a partir de ahí, todo lo que se
+andando en sincrónico, con su conversación de dos turnos funcionando": a partir
+de ahí, todo lo que se
 rompa es atribuible a lo nuevo.
 
 Se suma **Alembic**, que en el mini 9 era opcional. Acá la tabla de tareas crece
@@ -154,14 +162,14 @@ conversación) y sin migraciones cada fase te obliga a tirar la base.
 - `app/models.py`, `app/repository.py`, `app/context.py`, `app/budget.py`,
   `app/policy.py`, `app/deps.py`, `app/tools/`, `app/agent.py` — portados
 - `alembic/` — la migración inicial generada del estado actual de los modelos
-- `tests/` — los del mini 9, con la fixture de DB transaccional en sincrónico
+- `PRUEBAS.md` — las tres verificaciones manuales de esta fase
 
 ### Cómo verificarlo
 
 ```bash
 docker compose up -d
 uv run alembic upgrade head
-uv run pytest                          # los tests del mini 9, en verde
+uv run python -m scripts.seed_orders   # datos para probar a mano
 uv run uvicorn app.main:app --reload
 ```
 
@@ -333,7 +341,8 @@ def reset_pool(**kwargs):
 
 Es el primo sincrónico del problema que el `ANTES_DE_EMPEZAR` describe con
 `NullPool`: la causa es la misma —un recurso creado en un contexto y usado en
-otro— y por eso también es la misma que resolviste en `tests/conftest.py`.
+otro— y es la misma causa por la que en el mini 9 el `conftest.py` necesitaba
+`NullPool`.
 
 ### Qué construimos
 
@@ -380,7 +389,8 @@ con tu código.
   exactamente el trade que el `ANTES_DE_EMPEZAR` describe con Temporal y que
   decidimos no hacer.
 - **La pregunta que vale** — si un framework sólo cubre esta fase reemplazando el
-  transporte, ¿qué aprendés de él además de su API? Esa respuesta es la Fase 13.
+  transporte, ¿qué aprendés de él además de su API? Ésa es la pregunta que
+  contestan los PROJECT 4 y 5.
 
 ---
 
@@ -1092,41 +1102,58 @@ gastó nada.
 
 ---
 
-## Fase 11 — Tests + CHECK_LEARNING
+## Fase 11 — Verificación manual + CHECK_LEARNING
 
 ### Concepto aislado
 
-Misma regla de siempre: **ningún test llama al modelo**. Lo que se suma en este
-proyecto es una tercera dependencia molesta, después de la base: **Celery**.
+Este proyecto **no tiene suite automática**, y la razón no es ahorrar trabajo.
 
-Y la trampa de esta fase tiene nombre: `task_always_eager`. Es la opción que hace
-que `.delay()` ejecute la tarea en el mismo proceso, y es tentadora porque hace
-que todo "funcione" en los tests. **Miente en lo que este proyecto testea**:
+Un test automático contesta *"¿funciona?"*. Un `assert` verde te dice que el
+invariante se cumple; no te enseña qué lo rompe, ni cómo se ve cuando se rompe,
+ni por qué el diseño quedó así. Eso se aprende mirando el sistema funcionar y,
+sobre todo, rompiéndolo a propósito.
 
-- no serializa el payload → no te enterás de que estás mandando algo que no es JSON
-- no hay broker → no hay `acks_late`, no hay reentrega, **no podés testear la doble
-  ejecución**, que es la Fase 5 entera
-- los reintentos se comportan distinto
-- no hay `fork` → no reproduce el problema del pool de la Fase 2
+Las pruebas viven en `PRUEBAS.md`, una sección por fase, **tres como máximo**, y
+cada una con la misma forma:
 
-Sirve para un smoke test de "el endpoint encola algo". Para nada más.
+    Correr    el comando
+    Observar  qué tenés que ver, y dónde mirar
+    Por qué   qué mecanismo lo produce
+    Rompelo   el experimento que hace visible el mecanismo
 
-Lo que sí funciona, en cuatro capas:
+La fila **Rompelo** es la que importa. Un documento con sólo comandos que andan
+es QA, no aprendizaje.
 
-1. **Puras, sin nada** — la clasificación de errores de la Fase 4, las
-   transiciones de estado válidas, `context.fit()`, el cálculo de presupuesto.
-2. **La lógica de la tarea, sin Celery** — llamando a **la función** que la tarea
-   envuelve, con una base real. Acá vive el 80% de los tests de este proyecto:
-   idempotencia (llamar dos veces), cancelación (prender el flag y ver dónde
-   corta), presupuesto (agotarlo a mitad de loop). No hace falta un broker para
-   nada de eso.
-3. **El encolado, con mock** — que el endpoint llame a `.delay()` con el
-   `task_id` correcto y **nada más**. Eso es todo lo que el endpoint hace ahora.
-4. **Integración de verdad, con broker real** — pocas, lentas, y las únicas que
-   pueden testear lo que las otras capas no: reentrega y `acks_late`. Marcadas para
-   no correrlas en cada `pytest`.
+Esta fase no agrega pruebas nuevas: **es la pasada completa**. Correr las de las
+once fases seguidas, sobre un sistema que ya tiene todas las piezas, y ver cuáles
+se rompieron en el camino. Varias van a fallar, y eso es información: una prueba
+de la Fase 2 que deja de pasar después de la Fase 8 es una regresión que ninguna
+fase individual podía detectar.
 
-Lo nuevo a cubrir, uno por fase:
+---
+
+**Lo que este proyecto perdió al no tener suite, dicho de frente.** No es gratis:
+
+- No hay red contra regresiones. La pasada completa de esta fase es manual y se
+  hace una vez; una suite corre en cada cambio.
+- No hay CI que falle. Cualquier cosa que se rompa se descubre corriéndolo.
+- Los casos de carrera —dos tareas contra el mismo presupuesto, dos aprobaciones
+  simultáneas— son incómodos de reproducir a mano y fáciles de escribir como test.
+
+La decisión fue explícita: el objetivo acá es entender, no sostener. En un
+proyecto que tuviera que durar, la suite no es opcional — y si algún día querés
+escribirla, la lista de abajo es exactamente su índice.
+
+### Qué construimos
+
+- Una pasada completa de `PRUEBAS.md`, de la Fase 0 a la 10, anotando qué se
+  rompió
+- `CHECK_LEARNING.md` con las preguntas de cada fase, reunidas
+
+### Las doce afirmaciones que el sistema tiene que sostener
+
+Es la lista que hay que poder demostrar a mano al terminar — y, si algún día
+aparece una suite, su índice:
 
 - Llamar dos veces a la tarea ejecuta la tool con efectos **una sola vez** (F5)
 - Una tarea que arranca y encuentra su fila en `running` no la reprocesa (F5)
@@ -1138,169 +1165,33 @@ Lo nuevo a cubrir, uno por fase:
 - Dos `POST` de aprobación encolan una sola tarea de retoma (F9)
 - Dos tareas en paralelo contra el mismo presupuesto: sólo una pasa (F10)
 - `GET /tasks/{id}` de un id inventado da `404`, no "pending" (F3)
-
-### Qué construimos
-
-- `tests/conftest.py` — fixture de DB transaccional sincrónica, el cliente fake del
-  mini 8, y una fixture que construye tareas en estados arbitrarios
-- `tests/test_idempotency.py`, `test_retries.py`, `test_cancellation.py`,
-  `test_recovery.py`, `test_approvals.py`, `test_budget.py`, `test_routes.py`
-- `tests/integration/` — las de broker real, marcadas
-- `CHECK_LEARNING.md` con las preguntas de cada fase
+- El historial nunca tiene un `tool_use` sin su `tool_result` (F0, la consulta SQL)
+- El payload que cruza el broker no lleva datos de usuario (F2)
 
 ### Deberías poder responder
 
-- ¿Por qué `task_always_eager` no sirve para testear la Fase 5?
-- ¿Cómo testeás una reentrega sin matar un worker a mano?
-- ¿Por qué la mayoría de los tests llaman a la función y no a la tarea?
-- ¿Qué de este proyecto **no** se puede testear sin un broker real?
+- ¿Qué de este proyecto sólo se puede verificar rompiéndolo a mano?
+- ¿Cuáles de las doce afirmaciones son incómodas de probar manualmente, y por qué?
+- Si escribieras la suite, ¿cuál sería el primer test y por qué ése?
 
 ### Cómo lo resuelven los frameworks
 
-- **Pydantic AI** — tiene modelos de prueba pensados para esto: uno que contesta
-  cualquier cosa sin llamar a la API y otro que te deja guionar la secuencia de
-  respuestas. Es exactamente tu `fake_model` del mini 8, mantenido por otro. (Ojo
-  con la corrección que ya está anotada en el mini 9: **sólo funciona adentro de un
-  `Agent` de Pydantic AI**. No lo podés importar para testear tu loop.)
-- **LangGraph** — checkpointer en memoria para tests, y el historial de estados te
-  deja afirmar sobre la trayectoria y no sólo sobre el resultado final.
-- **Lo que sigue siendo tuyo** — todo lo de arriba. Las diez cosas de la lista son
-  de Celery, de tu base y de tu máquina de estados. El framework te ahorra el mock
-  del modelo, que es el pedazo más fácil.
-
----
-
-## Fase 12 — Monitoring, Docker, CI, deploy
-
-### Concepto aislado
-
-Lo de afuera va al final, y el error clásico es empezar por acá: un
-`docker-compose.yml` con seis servicios antes de que nada funcione en un proceso.
-
-**Monitoring: dos cosas distintas que se confunden todo el tiempo.**
-
-| | Salud del transporte | Estado del negocio |
-|---|---|---|
-| Qué | workers vivos, largo de cola, tareas activas | tus tareas, sus estados, sus errores |
-| De dónde | Celery / Redis | **tu tabla** |
-| Quién lo sirve | **Flower**, gratis, cero código | tu `/monitoring` |
-
-Ésa es la separación que la Fase 3 te pide hacer explícita. **Flower entra**: es un
-servicio más en el compose y te da workers, tareas activas y colas sin escribir una
-línea. Tu `/monitoring` del mini 7 se queda, pero acotado a lo que sólo vos podés
-contestar: cuántas tareas fallaron por presupuesto, cuántas reapeó el reaper,
-cuántas esperan aprobación.
-
-**Docker: dos imágenes o una.** La API y el worker corren el mismo código con
-distinto comando. Una sola imagen con dos `command` distintos es lo correcto: dos
-Dockerfiles se desincronizan.
-
-Y la trampa del deploy, que conecta con todo lo anterior: **un deploy mata
-workers a mitad de tarea**. Con `SIGTERM` Celery deja terminar la tarea en curso si
-le das tiempo (`stop_grace_period`); si el orquestador es impaciente, es un
-`SIGKILL` y estás en la Fase 8. Por eso la Fase 8 va antes que ésta: si el deploy
-es lo primero que hacés, cada deploy te deja tareas colgadas y no vas a saber por
-qué.
-
-### Qué construimos
-
-- `docker-compose.yml` completo: postgres, redis, api, worker, beat, flower
-- `Dockerfile` — una imagen, dos comandos
-- `app/routes/monitoring.py` — el del mini 7, acotado a métricas de negocio
-- `GET /health` — que verifique base y broker de verdad, no que devuelva `{"ok": true}`
-- `.github/workflows/` — lint, tests, build
-- `stop_grace_period` y el manejo de `SIGTERM` documentados
-- `infra/` con Terraform, si llegás
-
-### Cómo verificarlo
-
-`docker compose up` y la secuencia completa funcionando de cero. Después, la que
-importa: `docker compose restart worker` mientras hay tareas corriendo, y verificá
-qué quedó. Si quedaron tareas en `running`, mirá que el reaper las levante.
-
-### Deberías poder responder
-
-- ¿Qué de tu `/monitoring` no te lo puede dar Flower, y por qué?
-- ¿Por qué el `/health` tiene que tocar la base y el broker?
-- ¿Qué le pasa a una tarea en curso durante un deploy?
-
-### Cómo lo resuelven los frameworks
-
-- **Pydantic AI** — instrumentación OpenTelemetry lista para usar. Si ya mandás
-  trazas a algún lado, es un flag.
-- **LangGraph** — su plataforma comercial cubre esto (observabilidad, despliegue,
-  gestión de corridas) y es el negocio que sostiene la librería open source. Vale
-  saberlo al evaluar cuánto de lo que leés en su documentación es la librería y
-  cuánto es el producto pago.
-- **Lo que sigue siendo tuyo** — Docker, CI, el `/health` y el comportamiento en un
-  deploy. Nada de esto es de agentes.
-
----
-
-## Fase 13 — La comparación: reescribir con Pydantic AI y con LangGraph
-
-### Concepto aislado
-
-Ahora sí, con el proyecto andando y entendido. El objetivo no es migrar: es
-**medir**.
-
-La regla que hace que esta fase valga: se reescribe **una fase concreta, en una
-rama, sin borrar nada**, y se cuenta qué líneas desaparecen y cuáles no. Sin eso es
-una opinión.
-
-Las dos apuntan a cosas distintas, y por eso van las dos, en este orden:
-
-**Pydantic AI compara contra el mini 9.** El mapeo es casi 1:1 —`RunContext` y
-`deps_type`, `@registry.tool` y `@agent.tool`, tu serialización del historial y la
-suya, `budget.py` y sus límites de uso, tu pausa y sus tools con aprobación— así
-que la comparación es legible. Lo que te muestra: cuánta de tu plomería era
-plomería genérica.
-
-Lo que hay que anotar del otro lado, y es el punto de la fase: su historial es una
-representación **propia y multiproveedor**, no los bloques de Anthropic. Tu §2.1
-("el historial se persiste tal cual viaja") deja de ser una regla tuya y pasa a ser
-una promesa del framework. Se cumple, pero lo que hay en tu base ya no es lo que
-vio la API.
-
-**LangGraph compara contra P2.** No contra el mini 9: contra las tensiones nuevas.
-Checkpointer (Fase 8), `interrupt()` (Fase 9), historial de estado consultable
-(Fase 6), puntos seguros entre nodos (Fase 7). Te muestra que persistencia,
-reanudación, pausa y cancelación son un problema conocido con una solución
-conocida — y cuál es el precio: una tercera fuente de verdad, justo donde el diseño
-te pedía reducirlas a una.
-
-### Qué construimos
-
-Dos ramas, dos documentos cortos, nada mergeado.
-
-- `rama pydantic-ai/` — un turno del agente reescrito: el registry, el
-  `RunContext`, y la persistencia del historial
-- `rama langgraph/` — la Fase 9 reescrita: la pausa por aprobación con
-  `interrupt()` y un checkpointer sobre Postgres
-- `docs/comparacion.md` — la tabla que sale de eso:
-
-| Fase | Qué escribí yo | Qué lo cubre | Qué queda mío igual |
-|---|---|---|---|
-
-Y el párrafo que cierra el proyecto y es el más valioso para una entrevista: **por
-qué Celery y no Temporal**. Todo el §4.1 y el §3.4 —las dos partes más difíciles—
-son, en un sistema de ejecución durable, la primitiva base. Saber eso, saber que lo
-elegiste igual, y saber decir qué te habría costado, es la diferencia entre haber
-hecho un tutorial y haber tomado una decisión.
-
-### Deberías poder responder
-
-- ¿Qué fase de este proyecto **no** cubre ninguno de los dos frameworks, y por qué?
-- Si mañana arrancaras este proyecto de cero, ¿usarías alguno? ¿Cuál y para qué parte?
-- ¿Qué perdés al adoptar la representación de historial de un framework multiproveedor?
-- ¿Qué te habría regalado Temporal, y qué te habría costado?
+- **Pydantic AI** tiene modelos de prueba: uno que contesta cualquier cosa sin
+  llamar a la API y otro que te deja guionar la secuencia de respuestas. Es tu
+  `fake_model` del mini 8, mantenido por otro — pero **sólo funciona adentro de
+  un `Agent` suyo**, así que no se puede importar para probar tu loop.
+- **Lo que sigue siendo tuyo** — las doce afirmaciones de arriba. Son de Celery,
+  de tu base y de tu máquina de estados. El framework te ahorra el mock del
+  modelo, que es el pedazo más fácil.
 
 ---
 
 ## Correcciones al README del proyecto
 
-Las del `ANTES_DE_EMPEZAR.md` §6 siguen valiendo todas. Éstas se detectaron al
-armar el plan por fases:
+**Ya están aplicadas**: el README se reescribió con todo esto corregido. La tabla
+queda como registro de qué decía el original y por qué estaba mal — es el mismo
+ejercicio que el §6 del `ANTES_DE_EMPEZAR`, y leer las dos juntas muestra cuánto
+de un plan escrito antes de empezar no sobrevive al contacto con el código.
 
 | README dice | Correcto | Fase |
 |---|---|---|
@@ -1308,8 +1199,34 @@ armar el plan por fases:
 | `SQLAlchemy 2.0+ - Async ORM` | **Sincrónico**, por la decisión §5.1 | 0 |
 | No menciona Alembic | Es obligatorio: el esquema cambia en seis de las catorce fases | 0 |
 | El ejemplo de retry captura `TemporaryError`/`PermanentError` sin definirlas | La clasificación **es** el contenido de la fase, no un detalle | 4 |
-| `GET /monitoring/active` como estado de las tareas | Eso es salud del transporte. El estado de negocio sale de tu tabla | 3, 12 |
-| No menciona Flower | Cubre gratis la mitad de `/monitoring` | 12 |
+| `GET /monitoring/active` como estado de las tareas | Eso es salud del transporte. El estado de negocio sale de tu tabla | 3 |
 | `redis-cli FLUSHDB` como solución a tareas trabadas | Funciona, y te borra el result backend entero — otro motivo para no depender de él | 3 |
 | Task lifecycle sin `cancelled` ni `pending_approval` | Son dos de los cinco estados | 7, 9 |
-| `Timeline: 12-15h` | Con idempotencia, cancelación, recuperación y la comparación final, 25-30 h es honesto | — |
+| Terraform, Railway, CI, Flower | **Fuera de alcance.** Ver la nota de cierre | — |
+| `Timeline: 12-15h` | Con idempotencia, cancelación y recuperación, 18-22 h es honesto | — |
+
+---
+
+## Lo que queda fuera de alcance, y por qué
+
+Este proyecto termina en la Fase 11: un sistema que corre en tu máquina, que
+entendés, y que sabés romper. **No se despliega.**
+
+Quedan afuera a propósito:
+
+| Fuera | Por qué |
+|---|---|
+| Terraform, Railway, AWS | Es infraestructura, no agentes. Nada de eso te enseña algo sobre el problema de este proyecto |
+| CI (GitHub Actions) | Sin suite automática no hay nada que correr en CI |
+| Flower y los endpoints de `/monitoring` | Salud del transporte. Lo interesante —que el estado de negocio sale de tu tabla y no de Celery— ya está en la Fase 3 |
+| Dockerfile de la app | El `docker-compose.yml` levanta Postgres y Redis, que es lo que hace falta para correrlo. Empaquetar la app es un paso de deploy |
+
+Lo que **sí** está adentro y podría parecer de despliegue: el
+`worker_process_init` de la Fase 2 (sin eso el worker no anda) y el `/health`
+(porque enseña qué NO debe chequear un liveness).
+
+El costo de esta decisión es real y conviene tenerlo escrito: **este proyecto no
+demuestra que sabés deployar**. Si va al portfolio, lo que demuestra es que
+entendés idempotencia, cancelación cooperativa y recuperación de fallos — que es
+bastante más difícil de aprender que un `terraform apply`, y bastante menos
+común de encontrar.
