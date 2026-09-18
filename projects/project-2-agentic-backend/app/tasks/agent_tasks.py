@@ -16,7 +16,7 @@ inventado. Por eso el worker no confía en lo que le llega y vuelve a leer todo.
 import logging
 
 from app.agent.deps import AgentDeps
-from app.agent.loop import ApprovalRequired, run_agent
+from app.agent.loop import ApprovalRequired, RunCancelled, resume_run, run_agent
 from app.agent.repository import get_conversation
 from app.core.db import SessionFactory
 from app.core.models import Task
@@ -24,6 +24,9 @@ from app.tasks.base_task import AgentTask
 from app.tasks.celery_app import celery_app
 from app.tasks.retry_policy import MAX_REINTENTOS, REINTENTABLES, espera
 from app.tasks.state import (
+    cancelacion_pedida,
+    registrar_latido,
+    marcar_cancelada,
     marcar_corriendo,
     marcar_esperando_aprobacion,
     marcar_exitosa,
@@ -32,6 +35,12 @@ from app.tasks.state import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _latir(task_id: str) -> None:
+    """Marca la tarea como viva, en su propia conexión."""
+    with SessionFactory() as latido:
+        registrar_latido(latido, task_id)
 
 
 @celery_app.task(
@@ -74,6 +83,18 @@ def execute_agent_task(self: Task, task_id: str) -> None:  # type: ignore[valid-
             user_id=conversacion.user_id,
             conversation_id=conversacion.id,
             db=db,
+            # Para que cada paso de la traza diga de qué ejecución es. Sin esto el
+            # progreso por tarea no existe: los pasos quedarían colgando de la
+            # conversación, mezclados con los de todas las corridas anteriores.
+            task_id=task_id,
+            # Acá se cierra el circuito de la cancelación: el loop pregunta y esta
+            # función contesta leyendo la base. El loop nunca se entera de que
+            # existe una tabla `tasks`.
+            cancelado=lambda: cancelacion_pedida(db, task_id),
+            # Sesión propia y corta: acá hay un commit, y sobre la sesión del
+            # turno arrastraría lo que hubiera pendiente. Mismo motivo por el que
+            # la traza tiene la suya.
+            latir=lambda: _latir(task_id),
         )
 
         # El prompt se lee ANTES de la transición: el CAS es un UPDATE que no
@@ -100,6 +121,14 @@ def execute_agent_task(self: Task, task_id: str) -> None:  # type: ignore[valid-
 
         try:
             result = run_agent(db, conversacion.id, prompt, deps)
+
+        except RunCancelled as exc:
+            # No es un fallo: alguien lo pidió. El loop ya cortó en un punto
+            # seguro y no persistió nada del turno.
+            logger.info("tarea id=%s cancelada en la vuelta %d", task_id, exc.iteration)
+            if not marcar_cancelada(db, task_id):
+                logger.error("tarea id=%s: no se pudo marcar cancelled", task_id)
+            return
 
         except ApprovalRequired:
             # El loop se frenó esperando a un humano. Acá se ve el problema que
@@ -171,3 +200,93 @@ def execute_agent_task(self: Task, task_id: str) -> None:  # type: ignore[valid-
             result.iterations,
             result.tools_used,
         )
+
+
+@celery_app.task(
+    name="agent.resume",
+    bind=True,
+    base=AgentTask,
+    max_retries=MAX_REINTENTOS,
+)
+def resume_agent_task(self: Task, task_id: str, tool_use_id: str) -> None:  # type: ignore[valid-type]
+    """Retoma una corrida que estaba esperando una aprobación.
+
+    Es un mensaje NUEVO de Celery sobre la MISMA tarea. Ésa es la idea central de
+    esta fase: **una pausa es el final de un mensaje, no un mensaje que espera**.
+
+    Si el worker se quedara bloqueado esperando la decisión, cada aprobación
+    pendiente regalaría un worker — con concurrencia 4, alcanzan cuatro
+    aprobaciones olvidadas para frenar el sistema entero.
+
+    La decisión ya está tomada y persistida: la registró el endpoint antes de
+    encolar esto. Acá sólo se reconstruye y se sigue.
+    """
+    with SessionFactory() as db:
+        tarea = db.get(Task, task_id)
+        if tarea is None:
+            logger.warning("retoma de tarea inexistente id=%s, se descarta", task_id)
+            return
+
+        conversacion = get_conversation(db, tarea.conversation_id)
+
+        deps = AgentDeps(
+            user_id=conversacion.user_id,
+            conversation_id=conversacion.id,
+            db=db,
+            task_id=task_id,
+            cancelado=lambda: cancelacion_pedida(db, task_id),
+            latir=lambda: _latir(task_id),
+        )
+
+        logger.info("retomando tarea id=%s tool_use=%s", task_id, tool_use_id)
+
+        try:
+            result = resume_run(db, conversacion.id, tool_use_id, deps=deps)
+
+        except RunCancelled as exc:
+            logger.info("tarea id=%s cancelada en la vuelta %d", task_id, exc.iteration)
+            marcar_cancelada(db, task_id)
+            return
+
+        except ApprovalRequired:
+            # El turno pidió DOS tools sensibles y todavía queda una por decidir.
+            # Los tool_result van todos en un mensaje, así que no se puede retomar
+            # hasta que estén todas resueltas: vuelve a la pausa.
+            logger.info("tarea id=%s sigue esperando otra aprobación", task_id)
+            marcar_esperando_aprobacion(db, task_id)
+            return
+
+        except REINTENTABLES as exc:
+            db.rollback()
+            intento = self.request.retries + 1
+            demora = espera(exc, self.request.retries)
+            registrar_reintento(db, task_id, intento)
+            logger.warning(
+                "retoma id=%s reintento %d/%d en %.1fs por %s",
+                task_id, intento, MAX_REINTENTOS, demora, type(exc).__name__,
+            )
+            raise self.retry(exc=exc, countdown=demora)
+
+        except Exception as exc:
+            db.rollback()
+            logger.exception("retoma id=%s falló definitivamente", task_id)
+            marcar_fallida(db, task_id, f"{type(exc).__name__}: {exc}")
+            return
+
+        if not marcar_exitosa(
+            db,
+            task_id,
+            {
+                "answer": result.text,
+                "iterations": result.iterations,
+                "tools_used": result.tools_used,
+                "usage": {
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                },
+            },
+        ):
+            logger.error("retoma id=%s terminó pero la fila ya se había movido", task_id)
+            return
+
+        logger.info("retoma id=%s ok iterations=%d", task_id, result.iterations)

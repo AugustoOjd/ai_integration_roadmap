@@ -19,6 +19,7 @@ La regla: lo que define permisos nunca va en el `input_schema`. Vale para el
 user_id, el tenant_id, el rol, el scope de un token y la conexión a la base.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Generic, TypeVar
 
@@ -44,6 +45,28 @@ class AgentDeps:
     # monkeypatching.
     db: Session
 
+    # De qué ejecución es esta corrida. None cuando el agente corre sin una fila
+    # detrás: el endpoint sincrónico de `/messages` y el de aprobaciones.
+    task_id: str | None = None
+
+    # Cómo pregunta el loop si lo frenaron.
+    #
+    # Es una función y no un `task_id` que el loop consulte por su cuenta, y la
+    # diferencia es de capas: `app/agent/` no sabe que existe una tabla `tasks`,
+    # y no tiene por qué. Declara qué necesita —"una forma de preguntar si debo
+    # parar"— y quien lo invoca decide cómo se contesta.
+    #
+    # El worker le pasa una que lee el flag de la base. El endpoint sincrónico no
+    # le pasa ninguna, y ahí la corrida simplemente no es cancelable.
+    cancelado: Callable[[], bool] | None = None
+
+    # Cómo avisa el loop que sigue vivo. Mismo patrón que `cancelado`, en la otra
+    # dirección: uno pregunta, el otro cuenta.
+    #
+    # El loop no sabe a quién le avisa ni para qué sirve. Quien lo invoca decide
+    # si eso escribe una fila, un contador de Prometheus, o nada.
+    latir: Callable[[], None] | None = None
+
 
 DepsT = TypeVar("DepsT")
 
@@ -66,6 +89,11 @@ class RunContext(Generic[DepsT]):
     # y una referencia.
     turn: int = 0
     iteration: int = 0
+
+    # El id del bloque `tool_use` que produjo esta ejecución. Lo pone el loop
+    # justo antes de llamar a la tool, y es la clave del candado de idempotencia:
+    # viene del historial persistido, así que es el mismo en cada reintento.
+    tool_use_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

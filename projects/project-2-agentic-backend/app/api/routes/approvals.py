@@ -17,8 +17,8 @@ import logging
 from fastapi import APIRouter
 
 from app.agent.deps import AgentDeps, CurrentUser
-from app.agent.loop import resume_run
-from app.agent.repository import get_conversation
+from app.agent.loop import ApprovalRequired, resume_run
+from app.agent.repository import decidir_aprobacion, get_conversation, pendientes_de
 from app.api.schemas.conversations import (
     ApprovalDecision,
     PendingApprovalBody,
@@ -74,7 +74,18 @@ def decidir(
         decision.approved,
     )
 
-    result = resume_run(db, chat.id, tool_use_id, approved=decision.approved, deps=deps)
+    # Decidir y retomar están separados desde que la retoma puede correr en un
+    # worker. Acá pasan seguidos, en el mismo request, pero el orden es el mismo:
+    # la decisión se persiste antes de ejecutar nada.
+    decidir_aprobacion(db, chat.id, tool_use_id, approved=decision.approved)
+
+    # ¿Queda otra tool sensible del mismo turno? Los tool_result van todos en un
+    # mensaje, así que no se puede retomar hasta que estén todas resueltas.
+    restantes = [p for p in pendientes_de(db, chat.id) if p.tool_use_id != tool_use_id]
+    if restantes:
+        raise ApprovalRequired(chat.id, restantes)
+
+    result = resume_run(db, chat.id, tool_use_id, deps=deps)
 
     return TurnResponse(
         answer=result.text,

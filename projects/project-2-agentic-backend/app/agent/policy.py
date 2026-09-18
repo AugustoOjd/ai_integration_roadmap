@@ -39,6 +39,36 @@ REQUIEREN_APROBACION: frozenset[str] = frozenset(
 TTL_APROBACION = timedelta(hours=24)
 
 
+# Las tools cuya ejecución deja una marca en el mundo.
+#
+# Dos conjuntos y no uno, aunque acá tengan los mismos elementos, porque
+# responden preguntas distintas:
+#
+#   REQUIEREN_APROBACION  ¿hace falta que un humano diga que sí?
+#   TIENEN_EFECTOS        ¿correrla dos veces hace daño dos veces?
+#
+# Se separan en cuanto aparece una tool que escribe pero no necesita permiso —un
+# contador, un evento de auditoría, un webhook interno—: tiene efectos y no pide
+# aprobación. Y la que no tiene efectos nunca necesita el candado: pagar una fila
+# de idempotencia por un `calculate` es gasto puro.
+TIENEN_EFECTOS: frozenset[str] = frozenset(
+    {
+        "cancel_order",
+        "send_email",
+        "refund",
+    }
+)
+
+
+def tiene_efectos(tool_name: str) -> bool:
+    """¿Esta tool pasa por el candado de idempotencia?
+
+    La pregunta que resuelve la duda: si el worker se cae y esto corre de nuevo,
+    ¿alguien se entera? Un `SELECT` no; un `UPDATE`, un mail o un cobro sí.
+    """
+    return tool_name in TIENEN_EFECTOS
+
+
 def requiere_aprobacion(tool_name: str) -> bool:
     """¿Esta tool pausa el loop?
 

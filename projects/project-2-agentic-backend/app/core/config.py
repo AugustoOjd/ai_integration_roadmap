@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     # que falla en bucle la llena sola.
     DEAD_LETTER_MAX: int = 500
 
+    # Cuánto puede estar una tarea sin dar señales antes de darla por perdida.
+    #
+    # Tiene que ser bastante MAYOR que la vuelta más lenta que esperás: si es
+    # corto, matás tareas vivas que estaban esperando una respuesta larga del
+    # modelo. Con 8 vueltas de hasta 30s cada una, 300s deja margen de sobra.
+    TAREA_SIN_LATIDO_S: int = 300
+
+    # Cada cuánto corre el reaper. No tiene que ser fino: una tarea huérfana no
+    # se pone peor por esperar un minuto más.
+    REAPER_INTERVALO_S: int = 60
+
     # ------------------------------------------------------------------
     # Agente
     # ------------------------------------------------------------------
@@ -72,8 +83,13 @@ class Settings(BaseSettings):
     # el presupuesto, y hacen falta los dos.
     AGENT_MAX_ITERATIONS: int = 8
 
-    # Presupuesto por defecto, en tokens de input acumulados.
+    # Presupuesto por defecto de UNA conversación, en tokens de input acumulados.
     DEFAULT_BUDGET_TOKENS: int = 50_000
+
+    # Presupuesto de UN USUARIO por ventana. Acota a la persona, no al hilo: sin
+    # esto, veinte conversaciones de presupuesto sano gastan veinte veces más de
+    # lo que pensabas.
+    PRESUPUESTO_USUARIO_TOKENS: int = 200_000
 
     # Dólares por millón de tokens. Dos números porque input y output cuestan
     # distinto.

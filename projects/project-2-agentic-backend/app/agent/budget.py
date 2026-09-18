@@ -13,13 +13,17 @@ El tope real se cuenta en tokens y se chequea antes de mandar: contar después
 sirve para la factura, no para evitarla.
 """
 
+from datetime import UTC, datetime
+
 from anthropic import Anthropic
 from anthropic.types import MessageParam, ToolParam, Usage
+from sqlalchemy import update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.agent.repository import get_conversation
 from app.core.config import settings
-from app.core.models import Conversation, ConversationStatus
+from app.core.models import Conversation, ConversationStatus, UserBudget
 
 
 class BudgetExceededError(RuntimeError):
@@ -116,3 +120,122 @@ def costo_usd(usage: Usage) -> float:
     entrada = usage.input_tokens / 1_000_000 * settings.PRECIO_INPUT_USD_POR_MTOK
     salida = usage.output_tokens / 1_000_000 * settings.PRECIO_OUTPUT_USD_POR_MTOK
     return round(entrada + salida, 6)
+
+
+# ---------------------------------------------------------------------------
+# Presupuesto por usuario: reservar y liquidar
+# ---------------------------------------------------------------------------
+#
+# El de la conversación se puede leer y después escribir porque un solo turno la
+# toca por vez (el FOR UPDATE de `save_turn` lo garantiza). Éste no: el mismo
+# usuario puede tener cuatro tareas corriendo en cuatro workers, y las cuatro
+# chequean contra la misma fila.
+#
+# Leer, decidir y escribir por separado sería un lost update de manual: los
+# cuatro leen "gastó 9.000 de 10.000", los cuatro concluyen que entran, los
+# cuatro llaman al modelo.
+#
+# Y hay un segundo problema que el de la conversación no tiene: **el gasto se
+# conoce después**. `count_tokens` estima el input; el output se sabe recién con
+# la respuesta. De ahí el patrón de dos tiempos:
+#
+#     reservar(estimado)  ──> llamar al modelo ──> liquidar(real)
+#                         └──> si algo falla ──> liberar(estimado)
+
+
+def _ventana(momento: datetime | None = None) -> datetime:
+    """El inicio de la ventana actual, truncado a la hora."""
+    ahora = momento or datetime.now(UTC)
+    return ahora.replace(minute=0, second=0, microsecond=0)
+
+
+def reservar(db: Session, user_id: str, estimado: int) -> bool:
+    """Aparta `estimado` tokens si entran. Devuelve si prendió.
+
+    Una sola sentencia: el UPSERT inserta la fila de la ventana si no existía, y
+    si existía suma a `tokens_reserved` **sólo si el total sigue bajo el límite**.
+    Esa condición adentro del `DO UPDATE` es lo que cierra la carrera — la base
+    arbitra, y el que llega segundo ve cero filas afectadas.
+
+    Es el mismo compare-and-swap que las transiciones de estado, sobre números en
+    vez de sobre un enum.
+    """
+    limite = settings.PRESUPUESTO_USUARIO_TOKENS
+
+    if estimado > limite:
+        # Un solo request que no entra ni en una ventana vacía. Se corta acá para
+        # que el UPSERT no cree una fila con una reserva imposible.
+        return False
+
+    ventana = _ventana()
+
+    insercion = pg_insert(UserBudget).values(
+        user_id=user_id,
+        window_start=ventana,
+        tokens_limit=limite,
+        tokens_reserved=estimado,
+        tokens_used=0,
+    )
+    sentencia = insercion.on_conflict_do_update(
+        index_elements=["user_id", "window_start"],
+        set_={"tokens_reserved": UserBudget.tokens_reserved + estimado},
+        # El `where` va sobre el DO UPDATE: si no se cumple, la fila existente no
+        # se toca y `rowcount` queda en 0.
+        where=(
+            UserBudget.tokens_reserved + UserBudget.tokens_used + estimado
+            <= UserBudget.tokens_limit
+        ),
+    )
+    resultado = db.execute(sentencia)
+    db.commit()
+    return resultado.rowcount == 1
+
+
+def liquidar(db: Session, user_id: str, reservado: int, real: int) -> None:
+    """Cierra la reserva con lo que se gastó de verdad.
+
+    Suelta lo apartado y suma lo real. Las dos cosas en una sentencia, porque si
+    se hicieran en dos y el proceso muriera en el medio quedaría un presupuesto
+    contando mal para siempre.
+    """
+    db.execute(
+        update(UserBudget)
+        .where(UserBudget.user_id == user_id, UserBudget.window_start == _ventana())
+        .values(
+            tokens_reserved=UserBudget.tokens_reserved - reservado,
+            tokens_used=UserBudget.tokens_used + real,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+
+
+def liberar(db: Session, user_id: str, reservado: int) -> None:
+    """Devuelve una reserva que no se llegó a usar.
+
+    Se llama cuando la llamada al modelo falla: lo apartado no se gastó y dejarlo
+    reservado le come presupuesto al usuario por algo que nunca ocurrió.
+    """
+    db.execute(
+        update(UserBudget)
+        .where(UserBudget.user_id == user_id, UserBudget.window_start == _ventana())
+        .values(tokens_reserved=UserBudget.tokens_reserved - reservado)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+
+
+def estado_usuario(db: Session, user_id: str) -> dict[str, int | str]:
+    """Cuánto le queda al usuario en esta ventana."""
+    ventana = _ventana()
+    fila = db.get(UserBudget, (user_id, ventana))
+    limite = fila.tokens_limit if fila else settings.PRESUPUESTO_USUARIO_TOKENS
+    usados = fila.tokens_used if fila else 0
+    reservados = fila.tokens_reserved if fila else 0
+    return {
+        "window_start": ventana.isoformat(),
+        "tokens_limit": limite,
+        "tokens_used": usados,
+        "tokens_reserved": reservados,
+        "tokens_remaining": max(0, limite - usados - reservados),
+    }

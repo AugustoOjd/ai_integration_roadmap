@@ -20,7 +20,7 @@ celery_app = Celery(
     # Los módulos con tareas se importan explícitamente. Un `@celery_app.task` en
     # un módulo que el worker nunca importa no existe para el worker, y el
     # síntoma es un `Received unregistered task` que no dice dónde buscar.
-    include=["app.tasks.agent_tasks"],
+    include=["app.tasks.agent_tasks", "app.tasks.reaper"],
 )
 
 celery_app.conf.update(
@@ -40,9 +40,53 @@ celery_app.conf.update(
     enable_utc=True,
     # El worker publica STARTED además de PENDING/SUCCESS/FAILURE.
     task_track_started=True,
+    # ---- La entrega al menos una vez -------------------------------------
+    #
+    # Por default Celery confirma el mensaje ANTES de ejecutarlo: si el worker se
+    # muere a mitad, la tarea se perdió y nadie se entera. Con `acks_late` la
+    # confirmación va DESPUÉS, así que un worker que muere deja el mensaje sin
+    # confirmar y el broker se lo da a otro.
+    #
+    # El precio es exactamente el problema de esta fase: un worker que muere
+    # después de ejecutar pero antes de confirmar hace que la tarea corra DOS
+    # VECES. No es un riesgo, es el diseño — "exactly once" no existe, y lo que
+    # se elige es entre perder y duplicar.
+    #
+    # Elegimos duplicar, y la defensa es el candado del `status` de la fila más
+    # el registro de `tool_executions`.
+    task_acks_late=True,
+    # Cuando el worker muere de verdad (SIGKILL, OOM), el mensaje se re-encola en
+    # vez de descartarse. Sin esto, `acks_late` no protege del caso que más
+    # importa. La contracara: una tarea que mata al worker se re-entrega para
+    # siempre, y lo que la frena es el CAS de `marcar_corriendo`.
+    task_reject_on_worker_lost=True,
     # Los resultados se vencen solos. Sin esto Redis acumula una clave por tarea
     # para siempre, y como nadie las lee, es memoria que sólo crece.
     result_expires=3600,
+    # ---- El reloj ---------------------------------------------------------
+    #
+    # Lo dispara `celery beat`, que es un proceso APARTE del worker: beat sólo
+    # encola, el worker ejecuta. Si beat no corre, el reaper no existe y las
+    # tareas huérfanas se acumulan en silencio — que es el modo de falla más
+    # fácil de no notar de todo el proyecto.
+    #
+    # Y beat tiene que correr UNA sola vez en el cluster: dos instancias encolan
+    # el reaper dos veces. Acá no importa (el reaper es idempotente por el CAS),
+    # pero con una tarea que mande mails sí.
+    beat_schedule={
+        "reap-stale-tasks": {
+            "task": "agent.reap_stale",
+            "schedule": float(settings.REAPER_INTERVALO_S),
+        },
+        "expire-approvals": {
+            "task": "agent.expire_approvals",
+            "schedule": float(settings.REAPER_INTERVALO_S),
+        },
+        "sweep-reservations": {
+            "task": "agent.sweep_reservations",
+            "schedule": float(settings.REAPER_INTERVALO_S),
+        },
+    },
 )
 
 # ---------------------------------------------------------------------------

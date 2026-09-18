@@ -79,16 +79,23 @@ uv run alembic upgrade head
 uv run python -m scripts.seed_orders
 ```
 
-Then three windows:
+Then four windows:
 
 ```bash
 uv run uvicorn app.main:app --reload                          # the API
 uv run celery -A app.tasks.celery_app worker --loglevel=info  # the worker
+uv run celery -A app.tasks.celery_app beat   --loglevel=info  # the clock
 docker compose exec postgres psql -U agentic -d agentic_backend
 ```
 
 The worker window is half the learning: the loop prints every iteration, every
 tool call and every token count as it goes.
+
+`beat` is a separate process and it is easy to forget. Without it the reaper
+never runs, orphaned tasks pile up silently, and **everything else keeps working
+perfectly** — which is what makes it the hardest failure mode here to notice.
+
+Celery has no `--reload`. After any code change, restart the worker by hand.
 
 ## 📝 API
 
@@ -97,16 +104,23 @@ for a token — but the *shape* is real: the owner arrives through a channel the
 model never sees.
 
 ```
-POST /conversations                              open a thread
-POST /conversations/{id}/tasks                   202 + task_id
-GET  /tasks/{id}                                 where it got to
-GET  /tasks?status=running                       the list
-POST /conversations/{id}/approvals/{tool_use_id} decide on a sensitive tool
-GET  /conversations/{id}/log                     the execution trace
+POST /conversations                        open a thread
+POST /conversations/{id}/tasks             202 + task_id
+GET  /tasks/{id}                           status, progress, what needs approving
+GET  /tasks?status=running                 the list
+POST /tasks/{id}/approvals/{tool_use_id}   decide, and re-enqueue the run
+POST /tasks/{id}/cancel                    cooperative, idempotent
+GET  /users/me/budget                      what is left in this window
+GET  /conversations/{id}/log               the audit trace
 ```
 
 `POST /conversations/{id}/tasks` returns **202, not 201**: what comes back is not
-the result, it's a promise.
+the result, it's a promise. `GET /tasks/{id}` is then the only channel — the
+result, the error, the pause and the progress are told there or not at all.
+
+There is also a synchronous door, `POST /conversations/{id}/messages`, kept from
+Phase 0: it runs the agent inside the request and leaves no `tasks` row. Useful
+for debugging against the queue-less baseline.
 
 ## 📂 Layout
 
@@ -116,8 +130,9 @@ app/
 ├── core/       config.py · db.py · models.py
 ├── agent/      loop.py · deps.py · repository.py · budget.py
 │               context.py · policy.py · llm.py
-├── tools/      registry.py · calculator · clock · orders · search
-├── tasks/      celery_app.py · agent_tasks.py · state.py
+├── tools/      registry.py · idempotency.py
+│               calculator · clock · orders · search
+├── tasks/      celery_app.py · agent_tasks.py · state.py · reaper.py
 │               retry_policy.py · base_task.py · dead_letter.py
 └── api/        errors.py · routes/ · schemas/
 ```
@@ -146,13 +161,13 @@ plan in **[FASES.md](./FASES.md)**.
 | 2 | Celery in the middle: the process boundary | ✅ |
 | 3 | One source of truth: the state is your table | ✅ |
 | 4 | Retries: what gets retried and what doesn't | ✅ |
-| 5 | Idempotency: the task that runs twice | |
-| 6 | Progress: the trace readable while it runs | |
-| 7 | Cooperative cancellation | |
-| 8 | The worker that dies: heartbeat and reaper | |
-| 9 | Approval with nobody watching | |
-| 10 | Per-user budget | |
-| 11 | Full manual pass + CHECK_LEARNING | |
+| 5 | Idempotency: the task that runs twice | ✅ |
+| 6 | Progress: the trace readable while it runs | ✅ |
+| 7 | Cooperative cancellation | ✅ |
+| 8 | The worker that dies: heartbeat and reaper | ✅ |
+| 9 | Approval with nobody watching | ✅ |
+| 10 | Per-user budget | ✅ |
+| 11 | Full manual pass + CHECK_LEARNING | ✅ |
 
 ## 🔬 Verification
 
@@ -163,6 +178,9 @@ breakage looks like, or why the design is shaped this way.
 **[PRUEBAS.md](./PRUEBAS.md)** has three checks per phase, each in four parts:
 *Correr* → *Observar* → *Por qué* → ***Rompelo***. The last one is the point —
 you break it on purpose and watch the mechanism become visible.
+
+**[CHECK_LEARNING.md](./CHECK_LEARNING.md)** gathers every question. If you can
+answer them without opening the code, the project did its job.
 
 The cost of that choice is stated in Phase 11: no regression net, no CI, and
 race conditions that are awkward to reproduce by hand. The goal here is to

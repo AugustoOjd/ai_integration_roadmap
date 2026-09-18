@@ -5,11 +5,14 @@ va a tener un valor que nadie sabe cómo llegó ahí. Acá las transiciones son 
 y el resto del código pide movimientos, no asigna valores.
 
     pending ──> running ──> success
-            │           ├──> failed
-            │           └──> pending_approval ──> success | failed
-            └──> failed      (la conversación estaba pausada o sin presupuesto)
+            │        ▲  ├──> failed
+            │        │  ├──> cancelled
+            │        └──┴─ pending_approval ──> cancelled
+            │              (la aprobación la devuelve a running)
+            ├──> failed      (la conversación estaba pausada o sin presupuesto)
+            └──> cancelled   (la cancelaron antes de que arrancara)
 
-`success` y `failed` son terminales: una tarea que terminó no vuelve a moverse.
+`success`, `failed` y `cancelled` son terminales: una tarea que terminó no vuelve a moverse.
 Eso no es una convención, es lo que impide que un reintento tardío pise el
 resultado de una corrida que ya cerró.
 
@@ -21,7 +24,7 @@ después escribir deja una ventana en el medio donde otro puede haberla movido.
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.models import Task, TaskStatus
@@ -33,13 +36,26 @@ class TaskNotFoundError(LookupError):
 
 # Qué se puede hacer desde cada estado. Un frozenset vacío es un estado terminal.
 TRANSICIONES: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
-    TaskStatus.RUNNING: frozenset(
-        {TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.PENDING_APPROVAL}
+    TaskStatus.PENDING: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED}
     ),
-    TaskStatus.PENDING_APPROVAL: frozenset({TaskStatus.SUCCESS, TaskStatus.FAILED}),
+    TaskStatus.RUNNING: frozenset(
+        {
+            TaskStatus.SUCCESS,
+            TaskStatus.FAILED,
+            TaskStatus.PENDING_APPROVAL,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    # De la pausa se vuelve a `running`: la aprobación encola un mensaje nuevo y
+    # la MISMA tarea sigue. No se crea otra fila — el usuario pidió una cosa y
+    # poléa un solo id.
+    TaskStatus.PENDING_APPROVAL: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.CANCELLED}
+    ),
     TaskStatus.SUCCESS: frozenset(),
     TaskStatus.FAILED: frozenset(),
+    TaskStatus.CANCELLED: frozenset(),
 }
 
 # La vuelta: desde qué estados se puede llegar a cada uno. Es lo que necesita el
@@ -121,6 +137,16 @@ def marcar_esperando_aprobacion(db: Session, task_id: str) -> bool:
     return _transicionar(db, task_id, TaskStatus.PENDING_APPROVAL)
 
 
+def marcar_retomando(db: Session, task_id: str) -> bool:
+    """`pending_approval -> running`. La aprobación llegó y la tarea sigue.
+
+    Es la MISMA tarea, no una nueva. Lo que terminó fue el mensaje de Celery: el
+    worker no se quedó bloqueado esperando a un humano, se fue. Quien poléa
+    siguió mirando el mismo `task_id` todo el tiempo.
+    """
+    return _transicionar(db, task_id, TaskStatus.RUNNING)
+
+
 def registrar_reintento(db: Session, task_id: str, intento: int) -> None:
     """Deja el contador de reintentos en la fila. No cambia el estado.
 
@@ -132,6 +158,63 @@ def registrar_reintento(db: Session, task_id: str, intento: int) -> None:
         .execution_options(synchronize_session=False)
     )
     db.commit()
+
+
+def marcar_cancelada(db: Session, task_id: str) -> bool:
+    """La corrida se frenó porque alguien lo pidió.
+
+    `cancelled` y no `failed`: una la pidió el usuario, la otra salió mal.
+    Mezclarlas arruina cualquier métrica de tasa de error — un pico de
+    cancelaciones es gente cambiando de opinión, no un incidente.
+    """
+    return _transicionar(
+        db, task_id, TaskStatus.CANCELLED, finished_at=datetime.now(UTC)
+    )
+
+
+def pedir_cancelacion(db: Session, task_id: str) -> None:
+    """Prende el flag. No frena nada por sí solo.
+
+    Es una señal, no una acción: el loop la va a ver en el próximo punto seguro.
+    Entre este UPDATE y el corte real pasa lo que tarde la llamada al modelo en
+    curso — unos segundos. Ése es el precio de no romper nada.
+    """
+    db.execute(
+        update(Task).where(Task.id == task_id).values(cancel_requested=True)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+
+
+def registrar_latido(db: Session, task_id: str) -> None:
+    """Deja constancia de que esta tarea sigue viva. No cambia el estado.
+
+    Tiene que correr en una sesión PROPIA, no en la del loop: acá hay un commit,
+    y sobre la sesión del turno arrastraría lo que hubiera pendiente — el mismo
+    problema que tenía la traza. Quien arma la función se encarga de eso.
+    """
+    db.execute(
+        update(Task).where(Task.id == task_id).values(heartbeat_at=datetime.now(UTC))
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+
+
+def cancelacion_pedida(db: Session, task_id: str) -> bool:
+    """¿Alguien pidió cancelar esta tarea?
+
+    Lee la columna con un SELECT nuevo, no del objeto en memoria: el flag lo
+    prendió OTRA conexión (un request HTTP) después de que esta transacción
+    empezara.
+
+    Que eso se vea depende del nivel de aislamiento. En READ COMMITTED —el
+    default de Postgres— cada sentencia ve lo último commiteado, así que funciona.
+    Con REPEATABLE READ esta consulta devolvería siempre el valor del principio de
+    la transacción y la cancelación no llegaría nunca.
+    """
+    return bool(
+        db.execute(select(Task.cancel_requested).where(Task.id == task_id)).scalar_one_or_none()
+    )
 
 
 def existe(db: Session, task_id: str) -> bool:

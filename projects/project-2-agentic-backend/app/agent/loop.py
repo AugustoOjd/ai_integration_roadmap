@@ -14,26 +14,31 @@ from typing import Any
 from anthropic.types import Message, MessageParam, ToolUseBlock, Usage
 from sqlalchemy.orm import Session
 
-from app.agent.budget import BudgetExceededError, estimar, marcar_agotada, verificar
+from app.agent.budget import (
+    BudgetExceededError,
+    estimar,
+    liberar,
+    liquidar,
+    marcar_agotada,
+    reservar,
+    verificar,
+)
 from app.agent.context import ajustar
 from app.agent.deps import AgentDeps, RunContext
 from app.agent.llm import get_client
 from app.agent.policy import requiere_aprobacion
 from app.agent.repository import (
-    ApprovalAlreadyDecidedError,
-    ApprovalExpiredError,
-    get_pending,
     get_conversation,
+    get_pending,
     load_history,
     next_turn,
     pause_turn,
-    pendientes_de,
     record_step,
     resume_turn,
     save_turn,
 )
 from app.core.config import settings
-from app.core.models import ApprovalStatus, PendingApproval, ConversationStatus
+from app.core.models import ApprovalStatus, PendingApproval
 
 # Importar app.tools es lo que dispara los decoradores y llena el registry.
 from app.tools import registry
@@ -71,6 +76,22 @@ class ApprovalRequired(Exception):
             f"la conversación {conversation_id} espera aprobación de "
             f"{[a.tool_name for a in aprobaciones]}"
         )
+
+
+class RunCancelled(Exception):
+    """Alguien pidió frenar la corrida y el loop llegó a un punto seguro.
+
+    No hereda de RuntimeError: nada falló. Es una salida ordenada, igual que
+    `ApprovalRequired`.
+
+    Lleva la vuelta en la que cortó porque es el dato que importa después: saber
+    si alcanzó a ejecutar tools o se frenó antes de la primera llamada.
+    """
+
+    def __init__(self, conversation_id: str, iteration: int) -> None:
+        self.conversation_id = conversation_id
+        self.iteration = iteration
+        super().__init__(f"corrida cancelada en la vuelta {iteration}")
 
 
 class MaxIterationsError(RuntimeError):
@@ -174,6 +195,47 @@ def _correr_loop(
     for iteration in range(1, max_iterations + 1):
         result.iterations = iteration
 
+        # ---- El punto seguro -------------------------------------------------
+        #
+        # Acá y en ningún otro lado: antes de llamar al modelo y antes de ejecutar
+        # nada. No hay una tool a mitad de camino ni un `tool_use` esperando su
+        # resultado, así que cortar deja el historial consistente.
+        #
+        # La alternativa —matar el proceso con `revoke(terminate=True)`— funciona
+        # en el sentido de que la tarea deja de correr, y deja atrás un `tool_use`
+        # sin su `tool_result`: la conversación queda rota para siempre y el
+        # síntoma aparece un request después.
+        #
+        # El precio de esperar al punto seguro es la latencia de la llamada en
+        # curso, unos segundos. Es barato.
+        # Señal de vida, antes de meterse en la llamada al modelo. Si el proceso
+        # muere ahí adentro, éste es el último latido que va a quedar — y la
+        # distancia entre él y `now()` es lo que delata al worker muerto.
+        if deps.latir is not None:
+            deps.latir()
+
+        if deps.cancelado is not None and deps.cancelado():
+            logger.info(
+                "cancelando conversation=%s turno=%d en la vuelta %d",
+                conversation_id,
+                turno,
+                iteration,
+            )
+            record_step(
+                conversation_id=conversation_id,
+                task_id=deps.task_id,
+                turn=turno,
+                iteration=iteration,
+                # No es una tool: es un evento de la corrida. El nombre entre
+                # paréntesis lo distingue de cualquier tool real en un `group by`.
+                tool_name="(cancelada)",
+                tool_input={},
+                tool_output="cancelada por pedido del usuario",
+            )
+            # Nada de lo que este turno generó se persiste: `save_turn` sólo corre
+            # en el camino feliz. La conversación queda exactamente como estaba.
+            raise RunCancelled(conversation_id, iteration)
+
         # El límite es el menor de dos topes con la misma unidad: lo que queda de
         # presupuesto y lo que entra en la ventana del modelo. Manda el que ate más
         # corto.
@@ -213,20 +275,50 @@ def _correr_loop(
             )
             raise
 
-        response: Message = client.messages.create(
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=settings.ANTHROPIC_MAX_TOKENS,
-            messages=messages,
-            # Las tools van en cada request: no son estado de la conversación, si
-            # las sacás en la vuelta 3 el modelo deja de poder pedirlas.
-            #
-            # Se calculan una sola vez arriba del loop porque `estimar` necesita
-            # exactamente la misma lista: dos llamadas a to_params() que devolvieran
-            # algo distinto harían que la estimación no corresponda al request. Y
-            # porque la caché de prompts es un match por prefijo, donde un solo byte
-            # distinto acá invalida todo lo que venga después.
-            tools=tools,
-        )
+        # ---- El presupuesto del USUARIO ---------------------------------
+        #
+        # El de la conversación ya se chequeó arriba y acota este hilo. Éste acota
+        # a la persona, y cruza conversaciones y workers: hace falta reservar
+        # ANTES de llamar, porque el que llega segundo tiene que enterarse de que
+        # no entra sin haber gastado nada.
+        #
+        # Los dos topes conviven y gana el que ate más corto.
+        if not reservar(db, deps.user_id, estimado):
+            marcar_agotada(
+                db,
+                conversation_id,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            )
+            raise BudgetExceededError(necesarios=estimado, disponibles=0)
+
+        try:
+            response: Message = client.messages.create(
+                model=settings.ANTHROPIC_MODEL,
+                max_tokens=settings.ANTHROPIC_MAX_TOKENS,
+                messages=messages,
+                # Las tools van en cada request: no son estado de la conversación,
+                # si las sacás en la vuelta 3 el modelo deja de poder pedirlas.
+                #
+                # Se calculan una sola vez arriba del loop porque `estimar`
+                # necesita exactamente la misma lista: dos llamadas a to_params()
+                # que devolvieran algo distinto harían que la estimación no
+                # corresponda al request. Y porque la caché de prompts es un match
+                # por prefijo, donde un solo byte distinto acá invalida todo lo que
+                # venga después.
+                tools=tools,
+            )
+        except BaseException:
+            # Lo apartado no se gastó: devolverlo. Sin esto, cada timeout le come
+            # presupuesto al usuario por una llamada que nunca ocurrió — y como la
+            # ventana dura una hora, el efecto se acumula.
+            liberar(db, deps.user_id, estimado)
+            raise
+
+        # Se liquida con el input REAL, que puede diferir del estimado: el
+        # recorte de contexto pudo haber cambiado el request entre la estimación y
+        # el envío.
+        liquidar(db, deps.user_id, estimado, response.usage.input_tokens)
 
         # El usage es por request, no acumulado. Sumarlo acá es la única forma de
         # saber qué costó la corrida entera. Mirá cómo crece input_tokens vuelta a
@@ -314,6 +406,7 @@ def _correr_loop(
                 nuevos,
                 turn=turno,
                 pendientes=[(c.id, c.name, dict(c.input)) for c in sensibles],
+                task_id=deps.task_id,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
             )
@@ -380,11 +473,10 @@ def resume_run(
     conversation_id: str,
     tool_use_id: str,
     *,
-    approved: bool,
     deps: AgentDeps,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ) -> AgentResult:
-    """Retoma una corrida pausada.
+    """Retoma una corrida pausada, con la decisión YA tomada.
 
     No se "continúa" nada: el `for` de la corrida original murió con aquel request.
     Se reconstruye — se levanta el historial de la base, se rearman los bloques
@@ -394,42 +486,27 @@ def resume_run(
     Esa distinción es la que justifica que el loop sea nuestro. Un loop que sólo se
     puede continuar desde la pila de Python exige que el proceso siga vivo esperando
     a una persona que quizás conteste mañana.
+
+    **No decide**: lee de la fila qué se decidió. Desde que la retoma corre en un
+    worker, decidir y ejecutar pasan en procesos distintos — el request registra
+    el sí o el no (`decidir_aprobacion`) y esto viene después, quizás segundos
+    después, quizás tras un reintento.
+
+    Que estén separados también los hace recuperables por separado: si el worker
+    muere entre la decisión y la ejecución, la decisión ya es durable y volver a
+    correr esto es seguro — la tool con efectos está detrás del candado del
+    `tool_use_id`.
     """
-    # El lock se toma primero y se sostiene toda la decisión: leer el pendiente,
-    # marcarlo y ejecutar la tool tienen que ser atómicos respecto de otro request
-    # que llegue con la misma decisión.
-    conversacion = get_conversation(db, conversation_id, for_update=True)
-
-    if conversacion.status is not ConversationStatus.PENDING_APPROVAL:
-        # Aprobar algo en una conversación que no espera nada es un conflicto de estado, no
-        # un "no encontrado".
-        raise ApprovalAlreadyDecidedError(conversation_id)
-
     aprobacion = get_pending(db, conversation_id, tool_use_id)
 
-    # El status de la fila ES el candado. No alcanza con que el endpoint sea
-    # cuidadoso: dos clicks, un reintento de red o un cliente con retry automático
-    # mandan el mismo POST dos veces, y acá "dos veces" significa dos cancelaciones
-    # o dos reembolsos.
-    if aprobacion.status is not ApprovalStatus.PENDING:
-        raise ApprovalAlreadyDecidedError(tool_use_id)
+    if aprobacion.status not in (ApprovalStatus.APPROVED, ApprovalStatus.REJECTED):
+        # Bug de programación: alguien llamó a retomar sin decidir antes.
+        raise RuntimeError(
+            f"la aprobación {tool_use_id} está en {aprobacion.status.value!r}: "
+            f"hay que decidirla antes de retomar"
+        )
 
-    if aprobacion.expires_at < datetime.now(UTC):
-        aprobacion.status = ApprovalStatus.EXPIRED
-        aprobacion.decided_at = datetime.now(UTC)
-        db.commit()
-        raise ApprovalExpiredError(tool_use_id)
-
-    aprobacion.status = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
-    aprobacion.decided_at = datetime.now(UTC)
-
-    # ¿Queda algo más por decidir en este turno? Un turno puede haber pedido dos
-    # tools sensibles, y los tool_result van todos en un mensaje: no se puede
-    # retomar hasta que estén todas resueltas.
-    restantes = [p for p in pendientes_de(db, conversation_id) if p.tool_use_id != tool_use_id]
-    if restantes:
-        db.commit()
-        raise ApprovalRequired(conversation_id, restantes)
+    approved = aprobacion.status is ApprovalStatus.APPROVED
 
     historial = load_history(db, conversation_id)
     turno = aprobacion.turn
@@ -458,8 +535,8 @@ def resume_run(
             )
             resultados.append(_result_block(call.id, texto, is_error=True))
             record_step(
-                db,
                 conversation_id=conversation_id,
+                task_id=deps.task_id,
                 turn=turno,
                 iteration=0,
                 tool_name=call.name,
@@ -517,8 +594,8 @@ def _run_tool(
 
     def dejar_traza(salida: str, *, es_error: bool) -> None:
         record_step(
-            ctx.deps.db,
             conversation_id=ctx.deps.conversation_id,
+            task_id=ctx.deps.task_id,
             turn=ctx.turn,
             iteration=ctx.iteration,
             tool_name=call.name,
@@ -529,6 +606,12 @@ def _run_tool(
             input_tokens=usage.input_tokens if usage else None,
             output_tokens=usage.output_tokens if usage else None,
         )
+
+    # El contexto de ESTA tool, con el id del bloque que la pidió. Es la clave
+    # del candado de idempotencia, y viaja por el contexto —no por los
+    # argumentos— por el mismo motivo que el `user_id`: no es algo que el modelo
+    # elija, es algo que el servidor sabe.
+    ctx = replace(ctx, tool_use_id=call.id)
 
     try:
         output = registry.execute(call.name, dict(call.input), ctx)

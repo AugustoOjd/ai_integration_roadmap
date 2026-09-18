@@ -167,14 +167,34 @@ class ToolRegistry:
         args = (ctx,) if tool.wants_context else ()
         kwargs = validated.model_dump()
 
-        output = tool.func(*args, **kwargs)
+        def correr() -> str:
+            output = tool.func(*args, **kwargs)
+            # Lo que devuelve una tool entra al contexto del modelo, y el contexto
+            # es texto. Un dict o una lista van como JSON, que el modelo lee sin
+            # ambigüedad.
+            #
+            # La serialización va ACÁ adentro y no afuera para que lo que se
+            # guarde en el candado de idempotencia sea exactamente el mismo string
+            # que se le devuelve al modelo. Guardar el dict y serializar después
+            # dejaría dos caminos que pueden producir texto distinto.
+            if isinstance(output, str):
+                return output
+            return json.dumps(output, ensure_ascii=False, default=str)
 
-        # Lo que devuelve una tool entra al contexto del modelo, y el contexto es
-        # texto. Un dict o una lista van como JSON, que el modelo lee sin
-        # ambigüedad.
-        if isinstance(output, str):
-            return output
-        return json.dumps(output, ensure_ascii=False, default=str)
+        # Imports locales: `idempotency` importa `ToolError` de este módulo, así
+        # que arriba serían un ciclo.
+        from app.agent.policy import tiene_efectos
+        from app.tools.idempotency import ejecutar_una_sola_vez
+
+        if not tiene_efectos(name):
+            # Leer no deja marca: pagar una fila de candado por un `calculate`
+            # sería gasto puro.
+            return correr()
+
+        if ctx is None:
+            raise RuntimeError(f"la tool {name!r} tiene efectos y necesita contexto")
+
+        return ejecutar_una_sola_vez(ctx, name, correr)
 
 
 def _es_contexto(annotation: Any) -> bool:

@@ -232,6 +232,9 @@ class TaskStatus(StrEnum):
     # Detenida esperando que un humano autorice una tool sensible. No es un
     # fallo y no es un final: es una pausa con estado propio.
     PENDING_APPROVAL = "pending_approval"
+    # La pidió cancelar el usuario. Distinto de `failed`: una la pidió alguien, la
+    # otra salió mal. Mezclarlas arruina cualquier métrica de tasa de error.
+    CANCELLED = "cancelled"
 
 
 class Task(Base):
@@ -283,6 +286,24 @@ class Task(Base):
     # con un `group by` junto al resto del estado.
     retries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
+    # La última señal de vida de quien la está corriendo. Se actualiza vuelta a
+    # vuelta del loop.
+    #
+    # Existe porque un worker muerto no puede decir que se murió: alguien de
+    # afuera tiene que notar que dejó de latir. NULL mientras nadie la tomó.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # La señal de cancelación. Es un flag y no un estado porque son dos cosas:
+    # "alguien la quiere frenar" y "ya se frenó". Entre una y otra pasa lo que
+    # tarde el loop en llegar a un punto seguro.
+    #
+    # Vive en la base y no en memoria porque quien cancela (un request HTTP) y
+    # quien obedece (un worker) son procesos distintos. Es el único canal que
+    # tienen.
+    cancel_requested: Mapped[bool] = mapped_column(default=False, server_default="false")
+
     # No hay `user_id` acá: sale de la conversación. Duplicarlo sería una segunda
     # fuente de verdad sobre de quién es la corrida, y ésa es exactamente la
     # columna que no puede discrepar.
@@ -308,6 +329,113 @@ class Task(Base):
         # "qué está corriendo ahora": el filtro de GET /tasks?status=running y,
         # más adelante, el que usa el reaper para encontrar tareas colgadas.
         Index("ix_tasks_status", "status"),
+    )
+
+
+class ToolExecutionStatus(StrEnum):
+    # Se reservó y todavía no volvió. Si esto sobrevive a un reinicio, hay un
+    # efecto del que no sabemos si ocurrió.
+    IN_FLIGHT = "in_flight"
+    DONE = "done"
+
+
+class ToolExecution(Base):
+    """El candado de idempotencia de una tool con efectos.
+
+    La clave primaria es el `tool_use_id` que mandó el modelo, y ésa es toda la
+    idea: viene del historial persistido, así que es **estable entre reintentos**.
+    Un `uuid4()` generado al ejecutar sería distinto cada vez y no serviría de
+    candado.
+
+    Vive en la MISMA transacción que la tool, y eso hace que para una tool cuyo
+    efecto está en esta base —`cancel_order`— la idempotencia sea perfecta: o
+    commitean las dos cosas o ninguna. Para una tool cuyo efecto sale afuera
+    (un mail, un cobro) eso no alcanza, y `in_flight` es el estado que nombra esa
+    ventana.
+    """
+
+    __tablename__ = "tool_executions"
+
+    tool_use_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # Para auditar y para que el borrado de una conversación se lleve esto.
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE")
+    )
+    tool_name: Mapped[str] = mapped_column(String(64))
+
+    status: Mapped[ToolExecutionStatus] = mapped_column(
+        SAEnum(
+            ToolExecutionStatus,
+            native_enum=False,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        default=ToolExecutionStatus.IN_FLIGHT,
+        server_default=ToolExecutionStatus.IN_FLIGHT.value,
+    )
+
+    # Lo que devolvió la tool, para poder responder lo MISMO en la segunda
+    # ejecución. Sin esto, la reejecución no repite el efecto pero sí le cambia
+    # la respuesta al modelo, y el historial deja de reproducirse igual.
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_tool_exec_conversation", "conversation_id"),
+    )
+
+
+class UserBudget(Base):
+    """Cuánto puede gastar un usuario en una ventana de tiempo.
+
+    El presupuesto de la conversación acota **un hilo**: protege contra una
+    conversación que se desbocó. Éste acota **a la persona**, y cruza
+    conversaciones, tareas y workers: protege la factura.
+
+    Son dos cosas distintas y por eso conviven. Un usuario con veinte
+    conversaciones de presupuesto sano puede gastar veinte veces más de lo que
+    pensabas.
+
+    La ventana es **fija**, no deslizante: se trunca a la hora. Una deslizante
+    ("los últimos 60 minutos") es más justa y obliga a sumar sobre un histórico
+    en cada chequeo; la fija es una fila y un `where`. A esta escala la fija
+    alcanza, y el precio conocido es el borde: alguien puede gastar el límite a
+    las 10:59 y otra vez a las 11:00.
+    """
+
+    __tablename__ = "user_budgets"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # Truncada a la hora. Es parte de la clave: una fila por usuario y ventana.
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+
+    # Se copia de config al crear la fila, igual que el de la conversación: si
+    # mañana baja el default, la ventana en curso no cambia de reglas.
+    tokens_limit: Mapped[int] = mapped_column(Integer)
+
+    # Apartados para llamadas que todavía no volvieron. Sube al reservar y baja
+    # al liquidar; en reposo tiene que ser 0.
+    tokens_reserved: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    # Gastados de verdad, con el `usage` de la respuesta.
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("tokens_reserved >= 0", name="ck_budget_reserved_positive"),
+        CheckConstraint("tokens_used >= 0", name="ck_budget_used_positive"),
     )
 
 
@@ -399,6 +527,17 @@ class PendingApproval(Base):
         ForeignKey("conversations.id", ondelete="CASCADE")
     )
 
+    # De qué ejecución salió. Nullable porque el endpoint sincrónico de
+    # `/messages` puede pausar sin que haya una tarea detrás.
+    #
+    # Sin esta columna se podría llegar a la tarea por la conversación —sólo una
+    # puede estar pausada por vez, porque una conversación pausada rechaza tareas
+    # nuevas— pero sería una deducción, y las deducciones se rompen el día que
+    # alguien relaja esa regla.
+    task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True
+    )
+
     # El id del bloque tool_use que quedó sin ejecutar. El historial ya lo tiene
     # persistido, así que el tool_result que se arme después tiene que llevar este
     # mismo id o la API rechaza el request.
@@ -464,6 +603,17 @@ class ExecutionStep(Base):
         ForeignKey("conversations.id", ondelete="CASCADE")
     )
 
+    # De qué ejecución es este paso. Es lo que hace contestable "¿cómo va ESTO
+    # que pedí?" mientras corre — la conversación no alcanza, porque tiene
+    # muchas corridas.
+    #
+    # Nullable porque no toda corrida tiene tarea: el endpoint sincrónico de
+    # `/messages` y el de aprobaciones corren el agente sin crear una fila. Cuando
+    # esas dos puertas pasen por `tasks`, la columna puede apretarse a NOT NULL.
+    task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True
+    )
+
     # Las dos coordenadas que ubican un paso: en qué turno de la conversación y en
     # qué vuelta del loop dentro de ese turno.
     turn: Mapped[int] = mapped_column(Integer)
@@ -503,4 +653,7 @@ class ExecutionStep(Base):
         # "la traza de esta conversación, más nueva primero". Se declara ASC aunque la
         # query ordene DESC: Postgres recorre un btree hacia atrás sin problema.
         Index("ix_steps_conversation_created", "conversation_id", "created_at"),
+        # "los pasos de esta tarea, en orden": la consulta del polling, que corre
+        # cada pocos segundos mientras la tarea vive.
+        Index("ix_steps_task_id", "task_id", "id"),
     )

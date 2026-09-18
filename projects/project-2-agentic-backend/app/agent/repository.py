@@ -198,9 +198,9 @@ def next_turn(db: Session, conversation_id: str) -> int:
 
 
 def record_step(
-    db: Session,
     *,
     conversation_id: str,
+    task_id: str | None,
     turn: int,
     iteration: int,
     tool_name: str,
@@ -211,41 +211,75 @@ def record_step(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
 ) -> None:
-    """Deja un paso de la traza, y lo COMMITEA en el acto.
+    """Deja un paso de la traza y lo commitea en el acto, en su PROPIA sesión.
 
-    El commit inmediato va contra el instinto de "una transacción por request", y
-    es el punto de la función: si el loop explota en la vuelta 3, las vueltas 1 y
-    2 son justamente lo que vas a querer mirar. Una traza que desaparece cuando
-    algo sale mal sirve para los casos en los que no la necesitás.
+    Dos decisiones, y la segunda arregla un agujero real.
 
-    Es seguro commitear acá porque durante el loop no hay nada más pendiente en
-    esta sesión de base: save_turn agrega los mensajes al final, en una transacción
-    propia. Si alguien agrega escrituras antes del loop, este commit se las
-    llevaría puestas.
+    **Commit inmediato.** Va contra el instinto de "una transacción por request",
+    y es el punto: si el loop explota en la vuelta 3, las vueltas 1 y 2 son
+    justamente lo que vas a querer mirar. Y es lo que hace que la traza sea
+    consultable **mientras la tarea corre**, que es toda esta fase.
 
-    La alternativa más robusta es una sesión de base aparte con su propia conexión.
-    No está acá porque duplica conexiones por corrida y rompe el aislamiento
-    transaccional de los tests.
+    **Sesión propia.** Antes commiteaba sobre la sesión del loop, y eso arrastraba
+    lo que hubiera pendiente ahí. El caso concreto: `cancel_order` hace `flush` de
+    la cancelación y de su reserva de idempotencia, y el `record_step` que venía
+    justo después las commiteaba — antes de que existiera el `tool_result` que las
+    registra. Si el loop moría en el medio, quedaba un pedido cancelado que el
+    historial no menciona.
+
+    Con conexión propia, el commit de la traza no toca la transacción del turno:
+    el efecto de la tool y la prueba de ese efecto siguen commiteando juntos, en
+    `save_turn` o en `resume_turn`.
+
+    El precio es una conexión más por paso. Vale: la alternativa era un agujero de
+    consistencia que sólo aparece cuando algo ya salió mal.
     """
     if tool_output is not None and len(tool_output) > MAX_TOOL_OUTPUT_CHARS:
         sobrante = len(tool_output) - MAX_TOOL_OUTPUT_CHARS
         tool_output = f"{tool_output[:MAX_TOOL_OUTPUT_CHARS]}... [+{sobrante} chars]"
 
-    db.add(
-        ExecutionStep(
-            conversation_id=conversation_id,
-            turn=turn,
-            iteration=iteration,
-            tool_name=tool_name,
-            tool_input=tool_input,
-            tool_output=tool_output,
-            is_error=is_error,
-            latency_ms=latency_ms,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+    # Import local: `db` importa config y modelos, y este módulo lo importa el
+    # loop. Traerlo arriba no es un ciclo hoy, pero ata el repositorio al engine
+    # global — y lo que hace testeable al resto de este módulo es justamente que
+    # reciba la sesión de afuera.
+    from app.core.db import SessionFactory
+
+    with SessionFactory() as traza:
+        traza.add(
+            ExecutionStep(
+                conversation_id=conversation_id,
+                task_id=task_id,
+                turn=turn,
+                iteration=iteration,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_output=tool_output,
+                is_error=is_error,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
         )
+        traza.commit()
+
+
+def load_task_steps(db: Session, task_id: str) -> list[ExecutionStep]:
+    """Los pasos de UNA ejecución, en orden.
+
+    Es la consulta del polling: corre cada pocos segundos mientras la tarea vive,
+    y devuelve más filas cada vez porque `record_step` commitea vuelta a vuelta.
+    Sin ese commit inmediato esto devolvería una lista vacía hasta el final, que
+    es justo cuando ya no hace falta.
+    """
+    return list(
+        db.execute(
+            select(ExecutionStep)
+            .where(ExecutionStep.task_id == task_id)
+            .order_by(ExecutionStep.id)
+        )
+        .scalars()
+        .all()
     )
-    db.commit()
 
 
 def load_steps(
@@ -355,6 +389,7 @@ def pause_turn(
     *,
     turn: int,
     pendientes: list[tuple[str, str, dict[str, Any]]],
+    task_id: str | None = None,
     input_tokens: int = 0,
     output_tokens: int = 0,
 ) -> list[PendingApproval]:
@@ -389,6 +424,7 @@ def pause_turn(
     aprobaciones = [
         PendingApproval(
             conversation_id=conversation_id,
+            task_id=task_id,
             tool_use_id=tool_use_id,
             turn=turno,
             tool_name=tool_name,
@@ -423,6 +459,22 @@ def pendientes_de(
     return list(db.execute(consulta.order_by(PendingApproval.id)).scalars().all())
 
 
+def pendientes_de_tarea(db: Session, task_id: str) -> list[PendingApproval]:
+    """Las aprobaciones abiertas de una ejecución."""
+    return list(
+        db.execute(
+            select(PendingApproval)
+            .where(
+                PendingApproval.task_id == task_id,
+                PendingApproval.status == ApprovalStatus.PENDING,
+            )
+            .order_by(PendingApproval.id)
+        )
+        .scalars()
+        .all()
+    )
+
+
 def get_pending(db: Session, conversation_id: str, tool_use_id: str) -> PendingApproval:
     """Trae un pedido de aprobación concreto, o levanta.
 
@@ -438,6 +490,76 @@ def get_pending(db: Session, conversation_id: str, tool_use_id: str) -> PendingA
     if aprobacion is None:
         raise ApprovalNotFoundError(tool_use_id)
     return aprobacion
+
+
+def decidir_aprobacion(
+    db: Session, conversation_id: str, tool_use_id: str, *, approved: bool
+) -> PendingApproval:
+    """Registra el sí o el no. No ejecuta nada.
+
+    Está separada de la ejecución porque a partir de esta fase las dos pasan en
+    **procesos distintos**: el request decide, un worker retoma. Y el orden
+    importa — la decisión se persiste primero, así dos POST simultáneos no pueden
+    encolar dos retomas.
+
+    El lock sobre la conversación se sostiene toda la función: leer el pendiente y
+    marcarlo tienen que ser atómicos respecto de otro request con la misma
+    decisión.
+    """
+    conversacion = get_conversation(db, conversation_id, for_update=True)
+
+    if conversacion.status is not ConversationStatus.PENDING_APPROVAL:
+        # Decidir sobre una conversación que no espera nada es un conflicto de
+        # estado, no un "no encontrado".
+        raise ApprovalAlreadyDecidedError(conversation_id)
+
+    aprobacion = get_pending(db, conversation_id, tool_use_id)
+
+    # El status de la fila ES el candado. No alcanza con que el endpoint sea
+    # cuidadoso: dos clicks, un reintento de red o un cliente con retry automático
+    # mandan el mismo POST dos veces, y acá "dos veces" significa dos
+    # cancelaciones o dos reembolsos.
+    if aprobacion.status is not ApprovalStatus.PENDING:
+        raise ApprovalAlreadyDecidedError(tool_use_id)
+
+    if aprobacion.expires_at < datetime.now(UTC):
+        aprobacion.status = ApprovalStatus.EXPIRED
+        aprobacion.decided_at = datetime.now(UTC)
+        db.commit()
+        raise ApprovalExpiredError(tool_use_id)
+
+    aprobacion.status = ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED
+    aprobacion.decided_at = datetime.now(UTC)
+    db.commit()
+    return aprobacion
+
+
+def expirar_vencidas(db: Session) -> list[PendingApproval]:
+    """Cierra las aprobaciones que nadie decidió a tiempo. Devuelve cuáles.
+
+    Sin esto, un pendiente de hace una semana sigue siendo aprobable: alguien
+    autoriza el martes un "cancelá el pedido 991" que el agente propuso el
+    viernes, cuando el pedido ya se entregó.
+
+    Con un humano mirando el 202 esto molestaba; sin nadie mirando, se acumulan.
+    """
+    vencidas = list(
+        db.execute(
+            select(PendingApproval).where(
+                PendingApproval.status == ApprovalStatus.PENDING,
+                PendingApproval.expires_at < datetime.now(UTC),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    ahora = datetime.now(UTC)
+    for aprobacion in vencidas:
+        aprobacion.status = ApprovalStatus.EXPIRED
+        aprobacion.decided_at = ahora
+    if vencidas:
+        db.commit()
+    return vencidas
 
 
 def resume_turn(
