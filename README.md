@@ -91,7 +91,7 @@ sr-backend-roadmap/
 ├── .gitignore
 ├── setup.sh (auto setup script)
 │
-├── MINI_PROYECTOS/              # 9 small, independent projects
+├── mini_projects/               # 9 small, independent projects
 │   ├── mini-1-crud-api/
 │   ├── mini-2-redis-cache/
 │   ├── mini-3-embeddings/
@@ -102,9 +102,15 @@ sr-backend-roadmap/
 │   ├── mini-8-tool-calling/
 │   └── mini-9-agent-loop/
 │
-├── PROYECTOS_COMPLETOS/         # 2 production-ready projects
-│   ├── project-1-rag-assistant/
-│   └── project-2-agentic-backend/
+├── projects/                    # complete projects
+│   ├── project-1-rag-assistant/       # a mano
+│   ├── project-2-agentic-backend/     # a mano
+│   ├── project-3-pydantic-ai/         # ecosistema alternativo
+│   ├── project-4-langchain-core/      # ── track LangChain/LangGraph ──
+│   ├── project-5-langchain-agents/
+│   ├── project-6-langgraph/
+│   ├── project-7-deep-agents/
+│   └── project-8-agent-ops/
 │
 ├── shared/                      # Shared utilities & templates
 │   ├── utils/
@@ -314,9 +320,12 @@ cd MINI_PROYECTOS/mini-9-agent-loop
 
 ## 🎁 Complete Projects
 
+Los dos primeros se construyen **a mano**, pieza por pieza. Los seis siguientes son
+ecosistemas: se aprenden encima de una base que ya entendés.
+
 ### PROJECT 1: RAG Research Assistant
 ```bash
-cd PROYECTOS_COMPLETOS/project-1-rag-assistant
+cd projects/project-1-rag-assistant
 ```
 
 **What it does:**
@@ -340,7 +349,7 @@ cd PROYECTOS_COMPLETOS/project-1-rag-assistant
 
 ### PROJECT 2: Agentic Backend
 ```bash
-cd PROYECTOS_COMPLETOS/project-2-agentic-backend
+cd projects/project-2-agentic-backend
 ```
 
 **What it does:**
@@ -370,6 +379,38 @@ Agent Result: "Task completed successfully"
 **GitHub Stars Potential:** ⭐⭐⭐⭐ (150+)
 
 **Interview Value:** Extremely high (agent workflows are bleeding edge)
+
+---
+
+## 🔗 Ecosistemas: Projects 3-8
+
+Projects 1 y 2 se construyen desde cero. Estos seis parten de ahí: el objetivo ya no
+es entender el mecanismo — eso ya lo hiciste — sino **aprender qué ofrece cada
+ecosistema, y qué te sigue costando a vos**.
+
+Cada proyecto tiene una app independiente y una sección `📖 Fuentes` con los docs
+oficiales y los cursos de [LangChain Academy](https://academy.langchain.com)
+relacionados con ese tema.
+
+| # | Proyecto | El core | Horas |
+|---|---|---|---|
+| **3** | [Pydantic AI](./projects/project-3-pydantic-ai/) | El agente tipado: el tipo *es* el contrato. Ecosistema alternativo, y el más corto | 5-6 |
+| **4** | [LangChain Core](./projects/project-4-langchain-core/) | `Runnable`, LCEL y el `\|`, retrieval. La base de todo lo que sigue | 6-8 |
+| **5** | [LangChain Agents](./projects/project-5-langchain-agents/) | `create_agent`, tools, **MCP**, **middleware**, human-in-the-loop | 8-10 |
+| **6** | [LangGraph](./projects/project-6-langgraph/) | Estado persistido por nodo: recuperación, cancelación, `interrupt()` | 10-12 |
+| **7** | [Deep Agents](./projects/project-7-deep-agents/) | El harness: planning, filesystem como paginación, subagentes | 8-10 |
+| **8** | [Agent Ops](./projects/project-8-agent-ops/) | Evals como disciplina, trazas, regresiones en CI, monitoring | 10-12 |
+
+```
+P3  Pydantic AI      un ecosistema aparte, visto antes para tener con qué comparar
+     │
+     ▼   ── track LangChain/LangGraph: de la base a lo más complejo ──
+P4  una llamada  →  P5  un turno  →  P6  una corrida  →  P7  una tarea larga
+                                                              │
+                                                              ▼
+                                                   P8  hacer que todo eso
+                                                       sea demostrable
+```
 
 ---
 

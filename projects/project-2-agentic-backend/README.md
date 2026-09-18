@@ -205,15 +205,25 @@ cancellation and crash recovery were in scope.
 
 ## 🔗 What comes after
 
+Este proyecto se hace entero a mano, y es la base de todo lo que sigue. Los
+siguientes son ecosistemas — cada uno resuelve por vos una parte de lo que acá
+escribiste:
+
 ```
-PROJECT 3 (LangChain)  →  PROJECT 4 (Pydantic AI)  →  PROJECT 5 (LangGraph)
-   una llamada              un turno                     una corrida
+P3  Pydantic AI      el agente tipado: schema, deps, validación bidireccional
+     │
+     ▼   ── track LangChain/LangGraph ──
+P4  LangChain Core   LCEL, Runnable, retrieval
+P5  LangChain Agents create_agent, tools, MCP, middleware, HITL
+P6  LangGraph        estado durable por paso: recuperación, interrupt
+P7  Deep Agents      harness para tareas largas
+P8  Agent Ops        evals, trazas, monitoring
 ```
 
-Project 4 rewrites this project's `app/agent/` layer; Project 5 rewrites its
-persistence, pause and recovery phases. Each phase here ends with a
-*"Cómo lo resuelven los frameworks"* note pointing at what those projects will
-measure.
+Cada fase de acá termina con una nota *"Cómo lo resuelven los frameworks"*. Los
+conceptos que se citan (checkpointer, `interrupt`, `RunContext`, `UsageLimits`)
+son estables; los nombres exactos de la API conviene verificarlos al llegar, que
+estas librerías se mueven rápido.
 
 ---
 
