@@ -1,1 +1,9 @@
 ANTES_DE_EMPEZAR.md
+
+# .env.example se versiona; .env no (API key y password).
+.env
+
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
