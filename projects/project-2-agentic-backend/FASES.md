@@ -91,16 +91,22 @@ varias fases la respuesta honesta es "no lo cubre ninguno de los dos", que es
 justamente lo que hace que este proyecto valga la pena.
 
 **Son notas al margen, no una fase.** Este proyecto se hace entero a mano y
-termina en la Fase 12. Las reescrituras con framework son proyectos propios, y
-van en este orden:
+termina en la Fase 12. Los ecosistemas son proyectos propios, y van en este
+orden:
 
-    PROJECT 3 (LangChain)  →  PROJECT 4 (Pydantic AI)  →  PROJECT 5 (LangGraph)
-       una llamada              un turno                     una corrida
+    P3  Pydantic AI      el agente tipado
+         │
+         ▼   ── track LangChain/LangGraph ──
+    P4  LangChain Core   LCEL, Runnable, retrieval
+    P5  LangChain Agents create_agent, tools, MCP, middleware, HITL
+    P6  LangGraph        estado durable por paso: recuperación, interrupt
+    P7  Deep Agents      harness para tareas largas
+    P8  Agent Ops        evals, trazas, monitoring
 
-El 4 reescribe tu capa `app/agent/`; el 5 reescribe las fases de persistencia,
-pausa y recuperación. Los conceptos que se citan acá (checkpointer, `interrupt`,
+El 3 se parece a tu capa `app/agent/`; el 6 a tus fases de persistencia, pausa y
+recuperación. Los conceptos que se citan acá (checkpointer, `interrupt`,
 `RunContext`, `UsageLimits`) son estables; los nombres exactos de la API
-conviene verificarlos al llegar a esos proyectos, porque ambas librerías se
+conviene verificarlos al llegar a esos proyectos, porque estas librerías se
 mueven rápido.
 
 ---
