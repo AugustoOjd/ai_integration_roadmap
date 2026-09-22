@@ -1,0 +1,56 @@
+NORDIX COMERCIO S.A. — GARANTÍAS Y SERVICIO TÉCNICO
+Documento GAR-007. Vigente desde el 1 de febrero de 2026.
+
+1. ALCANCE
+
+La garantía Nordix cubre defectos de fabricación y fallas de funcionamiento no
+atribuibles al uso. Es independiente de la política de devoluciones (DEV-004) y
+corre en paralelo: un producto puede estar fuera del plazo de devolución y
+seguir en garantía.
+
+2. PLAZOS POR CATEGORÍA
+
+- Electrónica de consumo: 12 meses desde la entrega.
+- Electrodomésticos grandes: 24 meses desde la entrega.
+- Accesorios y periféricos: 6 meses desde la entrega.
+- Productos de marca propia Nordix Basics: 36 meses desde la entrega.
+
+Las baterías de cualquier categoría tienen una garantía fija de 6 meses,
+independientemente del producto que las contenga.
+
+3. EXCLUSIONES
+
+Quedan fuera de garantía:
+- Daño por líquidos, salvo en productos con certificación IP67 o superior.
+- Daño estético que no afecte el funcionamiento.
+- Productos abiertos o intervenidos por un servicio técnico no autorizado.
+- Desgaste normal de consumibles (cartuchos, filtros, correas).
+
+4. PROCEDIMIENTO
+
+El cliente inicia el reclamo con el número de orden y una descripción de la
+falla. Si el diagnóstico remoto no alcanza, Nordix emite una orden de retiro sin
+costo dentro de los 3 días hábiles.
+
+El servicio técnico tiene 15 días hábiles para diagnosticar y reparar. Si la
+reparación supera ese plazo, el cliente puede optar por el reemplazo del
+producto por uno equivalente o por el reembolso del 100% del valor pagado.
+
+Si el mismo producto falla por tercera vez por la misma causa, se considera
+falla recurrente y corresponde reemplazo o reembolso sin pasar por reparación.
+El código interno de este caso es FR3.
+
+5. GARANTÍA EXTENDIDA
+
+Nordix ofrece garantía extendida opcional al momento de la compra, por 12 o 24
+meses adicionales. El costo es del 8% del valor del producto por cada 12 meses.
+
+La garantía extendida no cubre baterías ni consumibles, y se anula si el
+producto es revendido: no es transferible a un segundo dueño.
+
+6. PRODUCTOS SIN STOCK PARA REEMPLAZO
+
+Si corresponde reemplazo y no hay stock del modelo exacto, Nordix ofrece un
+modelo superior sin costo adicional para el cliente. Si el cliente rechaza el
+modelo alternativo, se procede al reembolso al valor de lista vigente al momento
+del reclamo, que puede ser mayor o menor al pagado originalmente.

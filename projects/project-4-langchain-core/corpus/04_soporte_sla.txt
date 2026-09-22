@@ -1,0 +1,63 @@
+NORDIX COMERCIO S.A. — NIVELES DE SOPORTE Y SLA
+Documento SOP-002. Vigente desde el 1 de marzo de 2026.
+
+1. CANALES
+
+Atención al Cliente opera por chat, correo electrónico y teléfono. El chat está
+disponible de lunes a viernes de 8:00 a 20:00 y sábados de 9:00 a 14:00. El
+correo se responde todos los días, incluidos feriados. El teléfono opera de
+lunes a viernes de 9:00 a 18:00.
+
+2. PRIORIDADES
+
+Todo ticket se clasifica en una de cuatro prioridades:
+
+- P1 CRÍTICO: el cliente no puede acceder a su cuenta, o hay un cobro duplicado
+  confirmado. Primera respuesta en 1 hora. Resolución objetivo: 4 horas.
+- P2 ALTO: paquete extraviado, producto dañado, garantía con producto
+  inutilizable. Primera respuesta en 4 horas. Resolución objetivo: 2 días
+  hábiles.
+- P3 NORMAL: consultas de plazos, cambios de dirección, devoluciones por
+  arrepentimiento. Primera respuesta en 1 día hábil. Resolución objetivo: 5 días
+  hábiles.
+- P4 BAJO: sugerencias, consultas comerciales generales. Primera respuesta en 3
+  días hábiles. Sin objetivo de resolución.
+
+Los tiempos de P1 corren en horario corrido, 24 por 7. Los de P2, P3 y P4 corren
+sólo en horario de atención.
+
+3. ESCALAMIENTO
+
+Un ticket escala automáticamente al nivel siguiente cuando supera el 80% de su
+tiempo objetivo de resolución sin actividad del agente asignado.
+
+Un ticket puede escalarse manualmente a Supervisión cuando el cliente lo pide de
+forma explícita, cuando el monto en disputa supera los 200.000 pesos, o cuando
+el caso involucra a un cliente con etiqueta PREFERENTE.
+
+4. AUTORIZACIONES POR MONTO
+
+- Hasta 25.000 pesos: cualquier agente de Atención al Cliente.
+- De 25.001 a 200.000 pesos: requiere supervisor.
+- Más de 200.000 pesos: requiere gerencia de Operaciones y queda registrado en
+  el comité mensual de excepciones.
+
+Estas autorizaciones aplican tanto a reembolsos como a créditos en cuenta y a
+envíos de reposición sin cargo.
+
+5. CLIENTES PREFERENTES
+
+La etiqueta PREFERENTE se asigna automáticamente a clientes con más de 12
+órdenes entregadas en los últimos 12 meses, o con un total facturado superior a
+1.500.000 pesos en ese período.
+
+Un cliente PREFERENTE sube una prioridad de forma automática: un ticket que
+sería P3 se trata como P2. Además, sus devoluciones por arrepentimiento no pagan
+el envío de retorno.
+
+6. MÉTRICAS
+
+El equipo mide tres indicadores: cumplimiento de primera respuesta, cumplimiento
+de resolución, y reapertura de tickets. Un ticket se considera reabierto si el
+cliente responde dentro de los 7 días corridos posteriores al cierre. La meta de
+reapertura es inferior al 12%.

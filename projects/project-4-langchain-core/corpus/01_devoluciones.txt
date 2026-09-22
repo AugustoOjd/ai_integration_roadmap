@@ -1,0 +1,58 @@
+NORDIX COMERCIO S.A. — POLÍTICA DE DEVOLUCIONES
+Documento DEV-004. Vigente desde el 1 de marzo de 2026. Reemplaza a DEV-003.
+
+1. PLAZO GENERAL
+
+El cliente dispone de 21 días corridos desde la fecha de entrega registrada por
+la transportista para solicitar una devolución. El plazo se cuenta desde la
+entrega efectiva, no desde la fecha de compra.
+
+Para productos de la categoría Electrónica el plazo se reduce a 10 días
+corridos. Para productos de la categoría Libros y Papelería el plazo se extiende
+a 45 días corridos.
+
+2. CONDICIONES DEL PRODUCTO
+
+El producto debe devolverse con su embalaje original y todos sus accesorios. Un
+producto sin embalaje original se acepta igual, pero con una retención del 15%
+sobre el monto a reembolsar en concepto de reacondicionamiento.
+
+No se aceptan devoluciones de:
+- Productos de higiene personal con el precinto abierto.
+- Software o licencias digitales ya activadas.
+- Productos personalizados o fabricados a pedido.
+- Alimentos y bebidas.
+
+3. COSTO DEL ENVÍO DE RETORNO
+
+Si la devolución se origina en un defecto del producto o en un error de Nordix
+(producto equivocado, faltante, dañado en tránsito), el envío de retorno es
+gratuito y Nordix emite una etiqueta prepaga.
+
+Si la devolución se origina en un arrepentimiento del cliente, el costo del
+envío de retorno lo asume el cliente y se descuenta del reembolso. El monto es
+fijo: 4.800 pesos para envíos dentro del AMBA y 7.200 pesos para el resto del
+país.
+
+4. PLAZOS DE REEMBOLSO
+
+Una vez recibido el producto en el depósito de Nordix, el equipo de Calidad
+tiene 3 días hábiles para inspeccionarlo. Aprobada la inspección, el reembolso
+se procesa según el medio de pago original:
+
+- Tarjeta de crédito: entre 5 y 15 días hábiles, según el emisor.
+- Transferencia bancaria: 2 días hábiles.
+- Crédito en cuenta Nordix: inmediato, y suma un 5% extra sobre el monto.
+
+5. DEVOLUCIONES PARCIALES
+
+Una orden con varios ítems puede devolverse parcialmente. El descuento por
+compra combinada, si lo hubo, se recalcula sobre los ítems retenidos y la
+diferencia se descuenta del reembolso.
+
+6. REEMBOLSO SIN DEVOLUCIÓN FÍSICA
+
+Para productos cuyo valor declarado sea inferior a 12.000 pesos, Nordix puede
+autorizar el reembolso sin exigir la devolución física del producto. Esta
+decisión la toma un supervisor de Atención al Cliente y queda registrada en el
+ticket con el código RSD.
