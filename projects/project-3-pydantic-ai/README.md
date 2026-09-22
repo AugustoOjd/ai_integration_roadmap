@@ -8,16 +8,21 @@ history serialization that keeps tool calls and their results paired. You know
 what those parts cost.
 
 Pydantic AI is a different answer to the same problem: **declare the types and let
-the framework derive everything else**. This project is a short, self-contained
-look at that ecosystem — what it does, what it buys you, and what it charges.
+the framework derive everything else**. This project is a self-contained look at
+that ecosystem — what it does, what it buys you, and what it charges.
+
+> 📋 The phase-by-phase plan lives in **[FASES.md](./FASES.md)**. It splits the
+> work in two: **deep** on the typed agent, which is what P3 is actually about,
+> and a **shallow pass** over the rest of the ecosystem — embeddings, MCP, evals,
+> graphs, interfaces — each of which gets its own project later in the roadmap.
 
 ## 📌 When to Start
 
 **Prerequisites:** Project 2 complete. You need the agent loop in your head, not
 on screen — this project doesn't diff against it.
 
-It is deliberately the **shortest** project in the roadmap, and it goes first for
-that reason: one layer, one library, minimal infrastructure.
+It goes first among the framework projects because it is **one layer, one
+library, minimal infrastructure**: no worker, no queue, no HTTP.
 
 ```
 Projects 1-2 (por tu cuenta)   la base
@@ -113,11 +118,46 @@ This is the part that changes how an agent fits into a backend. A validated
 object drops straight into a database write or an `if`. No parsing, no "please
 respond in JSON", no defensive `try: json.loads(...)`.
 
-### Around those four
+### 5. Toolsets — the tool set is a value you compose
 
-`UsageLimits` (a token and request ceiling per run) · tools that require approval
-· message history you can serialize and reload · durable execution through
-Temporal, DBOS or Prefect · OpenTelemetry-native instrumentation via Logfire.
+A tool is a function; a **toolset** is a collection you can do algebra on.
+
+```python
+# Which tools this caller sees is decided per run, not inside each tool.
+toolset = FunctionToolset(tools=[recent_orders, refund])
+
+agent = Agent(
+    "anthropic:claude-haiku-4-5",
+    deps_type=Deps,
+    # Only support agents ever see `refund` in the schema. Not a check inside
+    # the tool — the tool is not there at all.
+    toolsets=[
+        toolset.filtered(
+            lambda ctx, tool_def: ctx.deps.role == "agent" or tool_def.name != "refund"
+        )
+    ],
+)
+```
+
+Chainable: `.filtered(predicate)` · `.prefixed("weather")` for namespacing ·
+`CombinedToolset([a, b])` to merge · a `WrapperToolset` subclass overriding
+`call_tool` to wrap every call with your own logic · `ApprovalRequiredToolset`.
+
+In Project 2, "which tools does this user get" was an `if` at the top of every
+tool body. Here it's a value you build before the run starts.
+
+### Around those five
+
+`UsageLimits` — a ceiling per run on requests, output tokens, tool calls, and
+**cost** (`cost_limit=Decimal("0.01")`) · tools that require approval · message
+history you can serialize and reload · `RunContext.enqueue()` to inject a
+follow-up message mid-run · durable execution through Temporal, DBOS or Prefect ·
+OpenTelemetry-native instrumentation via Logfire.
+
+And one category that is neither tool nor toolset: **capabilities**
+(`capabilities=[MCP(...), ImageGeneration(...)]`) — features the framework
+resolves natively-or-by-fallback depending on the provider. The most opinionated
+abstraction in the library, and the one that ties you down the most.
 
 ## 🤝 Human-in-the-loop, the typed way
 
@@ -171,9 +211,14 @@ Deliberately small. No FastAPI, no Celery, no Redis: a script and a database.
 
 ```
 CLI → Agent(deps_type=Deps, output_type=Triage)
-        ├─ tools → PostgreSQL (orders, customers)
-        ├─ requires_approval → DeferredToolRequests → you → resume
-        └─ history ⇄ messages table (its representation)
+        ├─ toolsets  → filtered per caller → PostgreSQL (orders, customers)
+        ├─ approval  → DeferredToolRequests → you → DeferredToolResults → resume
+        ├─ model     → claude-haiku-4-5, behind a FallbackModel
+        ├─ history   ⇄ messages table (its representation, not the provider's)
+        └─ logfire   → spans per turn, per tool call, per validation retry
+
+        and, one afternoon each, off to the side:
+        agent.iter() · pydantic-graph · Embedder · MCP · clai · evals
 ```
 
 ## 📚 Tech Stack
@@ -183,8 +228,10 @@ CLI → Agent(deps_type=Deps, output_type=Triage)
 - **`claude-haiku-4-5`** — small, fast, good at tool calling. The project is
   about types, not about model quality.
 - **PostgreSQL** — orders, customers, and the serialized history
-- **logfire** — optional, one afternoon: OpenTelemetry-native tracing that shows
-  each turn, each tool call and each validation retry
+- **logfire** — OpenTelemetry-native tracing that shows each turn, each tool call
+  and each validation retry
+- **pydantic-graph**, **pydantic-evals** — separate packages, used briefly in the
+  shallow pass. They ship with the ecosystem but are not what P3 is about.
 
 ## 🚀 Quick Start
 
@@ -193,27 +240,57 @@ uv sync
 cp .env.example .env          # ANTHROPIC_API_KEY, DATABASE_URL
 docker compose up -d --wait
 uv run python -m app.seed     # a handful of fake customers and orders
-uv run python -m app.triage "mi paquete nunca llegó y me cobraron dos veces"
+uv run python -m app.schema   # the derived JSON Schema, no API call
+uv run python -m app.cli "mi paquete nunca llegó y me cobraron dos veces"
 ```
 
 ## 🗺️ Phases
 
-Five, each one small.
+Sixteen, most of them small. Full plan and dependencies in
+**[FASES.md](./FASES.md)**.
 
+### Part A — The typed agent (build it, break it, verify it)
+
+0. **Skeleton.** `uv`, Postgres, seed, `.env`. No agent yet.
 1. **One run, one type.** An `Agent` with `deps_type` and `output_type=Triage`.
    Print the derived JSON Schema for your tools and confirm `ctx` is absent from
    it — that absence is the whole dependency-injection idea, made visible.
 2. **Tools with teeth.** `recent_orders` and `refund` against real rows. Make the
    model send an invalid amount on purpose and watch `ModelRetry` turn a failure
    into another turn.
-3. **History.** Serialize a conversation, reload it in a fresh process, continue
+3. **Toolsets.** Decide which tools *this* caller sees, without a single `if`
+   inside a tool body. Print the schema twice, for two different callers.
+4. **History.** Serialize a conversation, reload it in a fresh process, continue
    it. Open the stored JSON and look at what's actually in there. This is where
    you form an opinion about the trade above.
-4. **Limits and approval.** `UsageLimits` to cap a run; `requires_approval=True`
+5. **Models and providers.** `FallbackModel`, `model.profile`, and actually
+   swapping the provider — because the table below asks how long that took.
+6. **Limits and approval.** `UsageLimits` to cap a run; `requires_approval=True`
    on `refund`, then the full `DeferredToolRequests` → approve/deny →
    `DeferredToolResults` → resume cycle, including a rejection.
-5. **Instrument it.** Wire Logfire and re-run phase 4. Seeing a validation retry
+7. **Instrument it.** Wire Logfire and re-run phase 6. Seeing a validation retry
    as a span is the fastest way to understand what the loop is really doing.
+
+### Part B — The ecosystem (a look, not a build)
+
+Functionality only. No infrastructure — each of these has its own project later.
+
+8. **Under the hood.** `agent.iter()`: the run you've been doing is a graph.
+   `UserPromptNode` → `ModelRequestNode` → `CallToolsNode` → `End`.
+9. **`pydantic-graph` on its own.** A small graph of your own, and its
+   auto-generated Mermaid diagram.
+10. **`Embedder`.** `embed_query` vs `embed_documents`, and why they differ.
+11. **MCP.** `capabilities=[MCP(url=...)]` — tools that are not functions in your
+    process. You consume a server; you don't write one.
+12. **Interfaces.** `agent.to_cli_sync()`, `clai web`, and
+    `run_stream_events()`. The same agent, three surfaces.
+13. **Image generation.** One capability the model decides to use on its own.
+14. **`pydantic-evals`.** Three cases, one `LLMJudge`, and one evaluator that
+    grades the **trajectory** instead of the answer.
+
+### Part C
+
+15. **Close it out.** Full manual verification and `APRENDIZAJES.md`.
 
 ## 📊 What to record in APRENDIZAJES.md
 
@@ -221,28 +298,56 @@ Five, each one small.
 |---|---|
 | What's in the derived schema for each tool, and what isn't | |
 | What happened when the model sent invalid arguments | |
+| How you decided which tools each caller sees | |
 | What the serialized history actually contains | |
+| Time to swap the model provider | |
 | How a pause is represented, and where it lives | |
 | Time to add a new tool | |
-| Time to swap the model provider | |
 | What you'd still have to build to run this in a worker | |
+| What the ecosystem tied you to, and what it saved you | |
 
-The last row is the honest one. Everything above it is what you were given.
+The second-to-last row is the honest one. Everything above it is what you were
+given.
 
 ## ⏱️ Timeline
 
-5-6 hours. Short by design: one layer, almost no infrastructure, and every
-problem it solves is a problem you've already met.
+11-13 hours, split in two:
+
+| Part | Hours | What it is |
+|---|---|---|
+| A — The typed agent | 6-7 | The project proper. One layer, almost no infrastructure, and every problem it solves is one you've already met. |
+| B — The ecosystem | 4-5 | A guided tour. Enough to have an opinion when these come back as full projects. |
+| C — Close it out | 1 | Verification and `APRENDIZAJES.md`. |
+
+If you only have an afternoon, Part A alone is a complete project. Part B is
+additive and can be dropped without leaving a hole.
 
 ## ✅ Completion Checklist
+
+**Part A**
 
 - [ ] Two tools whose schema you printed and read
 - [ ] `output_type` returning a validated object you write straight to the DB
 - [ ] An invalid tool call recovered via `ModelRetry`
+- [ ] The same agent showing two different tool sets to two different callers
 - [ ] A conversation that survives across processes
+- [ ] The same run against a second provider, with the diff noted
 - [ ] A run stopped by `UsageLimits`
 - [ ] A gated tool approved, and another one denied, both resumed
 - [ ] Logfire showing the turns of a single run
+
+**Part B**
+
+- [ ] A run stepped through node by node with `agent.iter()`
+- [ ] A graph of your own, rendered as Mermaid
+- [ ] One embedding you looked at, from `embed_query` and `embed_documents`
+- [ ] One MCP tool called from your agent
+- [ ] The agent talked to from the CLI and from the browser
+- [ ] One generated image
+- [ ] Three eval cases run, one of them grading the trajectory
+
+**Part C**
+
 - [ ] `APRENDIZAJES.md` with the table filled in
 
 ## 🎓 You're done when you can answer
@@ -254,6 +359,11 @@ problem it solves is a problem you've already met.
   and lose by it not being the provider's blocks?
 - A pause here is a return value. What does representing it that way make easy,
   and what does it make hard?
+- Why is a toolset a better answer than a check inside each tool, and when is it
+  a worse one?
+- An `Agent` is a `pydantic-graph` underneath. What did seeing the nodes change
+  about how you think of the loop?
+- What is a *capability*, and why is it neither a tool nor a toolset?
 - Would you start a new agent on this? What would stop you?
 
 See **[SOURCES.md](./SOURCES.md)** for official docs and related material.
@@ -262,5 +372,6 @@ See **[SOURCES.md](./SOURCES.md)** for official docs and related material.
 
 **Made as part of Sr Backend Roadmap** 🚀
 
-Start: after Project 2 · Duration: 5-6 h · Result: a working opinion about what
-types buy you in an agent, before meeting the LangChain ecosystem
+Start: after Project 2 · Duration: 11-13 h (Part A alone: 6-7 h) · Result: a
+working opinion about what types buy you in an agent, and a map of the ecosystem
+around it, before meeting LangChain
