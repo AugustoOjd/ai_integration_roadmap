@@ -1,0 +1,57 @@
+NORDIX COMERCIO S.A. — FACTURACIÓN Y MEDIOS DE PAGO
+Documento FAC-009. Vigente desde el 1 de marzo de 2026.
+
+1. MEDIOS ACEPTADOS
+
+Nordix acepta tarjeta de crédito, tarjeta de débito, transferencia bancaria y
+crédito en cuenta Nordix. No acepta efectivo contra entrega ni criptomonedas.
+
+El crédito en cuenta no vence y puede combinarse con cualquier otro medio de
+pago en la misma orden. No es transferible entre cuentas ni convertible a
+dinero.
+
+2. COBROS DUPLICADOS
+
+Un cobro duplicado se confirma cuando existen dos transacciones con el mismo
+monto, el mismo medio de pago y una diferencia menor a 10 minutos entre ellas.
+
+Confirmado el duplicado, la devolución del cargo se inicia el mismo día y no
+requiere autorización de supervisor, independientemente del monto. Es la única
+excepción a la tabla de autorizaciones del documento SOP-002.
+
+3. FACTURACIÓN
+
+La factura se emite al momento del despacho, no al de la compra. Se envía por
+correo electrónico en formato PDF y queda disponible en la cuenta del cliente
+por 10 años.
+
+Los cambios de datos fiscales pueden solicitarse hasta 5 días hábiles después de
+emitida la factura. Pasado ese plazo se requiere una nota de crédito, que
+procesa el área de Administración en 10 días hábiles.
+
+4. PROMOCIONES Y DESCUENTOS
+
+Los descuentos por compra combinada se calculan sobre el subtotal antes de
+impuestos y antes del costo de envío.
+
+Los cupones de descuento no son acumulables entre sí. Un cupón sí puede
+combinarse con una promoción bancaria vigente.
+
+Si una orden con descuento combinado se devuelve parcialmente, el descuento se
+recalcula sobre los ítems retenidos según lo indicado en DEV-004 sección 5.
+
+5. RETENCIONES Y AJUSTES
+
+Nordix no aplica retenciones sobre reembolsos, salvo las dos previstas en
+DEV-004: el 15% por falta de embalaje original y el costo del envío de retorno
+por arrepentimiento.
+
+6. DISPUTAS CON EL EMISOR
+
+Si el cliente inicia un contracargo con su banco, la orden queda congelada y
+Nordix no procesa reembolsos por la vía interna hasta que el emisor resuelva. El
+plazo típico del emisor es de 45 a 120 días corridos y está fuera del control de
+Nordix.
+
+Iniciar un contracargo mientras hay un reclamo abierto en Nordix suspende ese
+reclamo automáticamente.

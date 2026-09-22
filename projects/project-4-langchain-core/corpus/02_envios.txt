@@ -1,0 +1,57 @@
+NORDIX COMERCIO S.A. — POLÍTICA DE ENVÍOS
+Documento ENV-011. Vigente desde el 15 de enero de 2026.
+
+1. MODALIDADES
+
+Nordix opera con tres modalidades de envío:
+
+- ESTÁNDAR: 3 a 7 días hábiles. Costo 3.900 pesos. Gratuito para órdenes
+  superiores a 45.000 pesos.
+- EXPRÉS: 24 a 48 horas hábiles. Costo 9.500 pesos. No tiene umbral de
+  gratuidad.
+- RETIRO EN PUNTO: sin costo. El paquete queda disponible 7 días corridos en el
+  punto elegido; pasado ese plazo vuelve al depósito y la orden se cancela con
+  reembolso automático.
+
+La modalidad EXPRÉS no está disponible para las provincias de Tierra del Fuego,
+Santa Cruz ni Chubut.
+
+2. CORTE DE PREPARACIÓN
+
+Las órdenes confirmadas antes de las 14:00 se preparan el mismo día hábil. Las
+posteriores se preparan al día hábil siguiente. Los sábados hay preparación
+hasta las 11:00; los domingos y feriados no hay operación de depósito.
+
+3. SEGUIMIENTO
+
+Cada envío genera un código de seguimiento con el formato NX seguido de 10
+dígitos. El código se informa por correo electrónico dentro de las 2 horas de
+despachado el paquete.
+
+Los estados posibles son: EN PREPARACIÓN, DESPACHADO, EN TRÁNSITO, EN REPARTO,
+ENTREGADO, VISITA FALLIDA, DEVUELTO A ORIGEN.
+
+4. VISITAS FALLIDAS
+
+La transportista realiza hasta 2 intentos de entrega. Tras la segunda visita
+fallida el paquete se deriva a la sucursal más cercana y el cliente tiene 5 días
+hábiles para retirarlo. Vencido ese plazo, el paquete vuelve a origen y se
+aplica un cargo de 6.000 pesos por logística inversa, salvo que la falla sea
+atribuible a la transportista.
+
+5. PAQUETES EXTRAVIADOS
+
+Un envío se considera extraviado cuando permanece sin actualización de estado
+por más de 7 días corridos. A partir de ese momento el cliente puede solicitar
+reposición o reembolso total sin necesidad de esperar el cierre de la
+investigación con la transportista.
+
+La investigación con la transportista tiene un plazo máximo de 30 días corridos,
+pero ese plazo es interno y no debe comunicarse al cliente como condición para
+resolver su caso.
+
+6. ZONAS DE COBERTURA EXTENDIDA
+
+Para localidades clasificadas como zona extendida, todos los plazos se aumentan
+en 4 días hábiles y el costo de envío ESTÁNDAR pasa a 6.400 pesos. El umbral de
+gratuidad en zona extendida es de 70.000 pesos.

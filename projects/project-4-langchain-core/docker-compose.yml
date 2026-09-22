@@ -1,0 +1,41 @@
+services:
+  postgres:
+    # pgvector es una extensión en C: tiene que venir en la imagen.
+    image: pgvector/pgvector:pg17
+
+    environment:
+      POSTGRES_USER: nordix
+      POSTGRES_PASSWORD: nordix
+      POSTGRES_DB: nordix
+
+    ports:
+      # host:contenedor. 5436 afuera: 5432, 5433 y 5435 los usan P2, P3 y P1.
+      - "5436:5432"
+
+    volumes:
+      - p4_pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nordix -d nordix"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+
+    ports:
+      - "6381:6379"
+
+    volumes:
+      - p4_redisdata:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  p4_pgdata:
+  p4_redisdata:

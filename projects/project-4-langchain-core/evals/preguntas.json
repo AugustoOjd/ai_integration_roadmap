@@ -1,0 +1,274 @@
+[
+  {
+    "question": "¿Cuántos días tengo para devolver un producto de electrónica?",
+    "expect": [
+      [
+        "10"
+      ]
+    ],
+    "note": "DEV-004 §1. Trampa: el plazo general es 21, electrónica es 10.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "01_devoluciones.txt"
+    ]
+  },
+  {
+    "question": "¿Desde cuándo se cuenta el plazo de devolución?",
+    "expect": [
+      [
+        "entrega"
+      ]
+    ],
+    "note": "DEV-004 §1. Desde la entrega efectiva, no desde la compra.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "01_devoluciones.txt"
+    ]
+  },
+  {
+    "question": "Devuelvo un producto sin la caja original. ¿Pierdo algo?",
+    "expect": [
+      [
+        "15",
+        "15%"
+      ],
+      [
+        "reacondicionamiento",
+        "retención",
+        "retencion"
+      ]
+    ],
+    "note": "DEV-004 §2. Se acepta igual, con retención del 15%.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "01_devoluciones.txt"
+    ]
+  },
+  {
+    "question": "¿Cuánto cuesta el envío estándar y cuándo es gratis?",
+    "expect": [
+      [
+        "3.900",
+        "3900"
+      ],
+      [
+        "45.000",
+        "45000"
+      ]
+    ],
+    "note": "ENV-011 §1. Ojo con zona extendida, que cambia ambos números.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "02_envios.txt"
+    ]
+  },
+  {
+    "question": "¿Puedo usar envío exprés a Ushuaia?",
+    "expect": [
+      [
+        "no"
+      ],
+      [
+        "Tierra del Fuego"
+      ]
+    ],
+    "note": "ENV-011 §1. Requiere saber que Ushuaia es Tierra del Fuego. Si falla, es un límite del modelo, no del retrieval.",
+    "tipo": "razonamiento",
+    "fuente": [
+      "02_envios.txt"
+    ]
+  },
+  {
+    "question": "Mi paquete no se actualiza hace 9 días. ¿Qué puedo pedir?",
+    "expect": [
+      [
+        "reposición",
+        "reposicion",
+        "reembolso"
+      ]
+    ],
+    "note": "ENV-011 §5. A los 7 días ya se considera extraviado.",
+    "tipo": "razonamiento",
+    "fuente": [
+      "02_envios.txt"
+    ]
+  },
+  {
+    "question": "¿Cuánto dura la garantía de la batería de un electrodoméstico grande?",
+    "expect": [
+      [
+        "6",
+        "seis"
+      ]
+    ],
+    "note": "GAR-007 §2. Trampa fuerte: el electrodoméstico tiene 24 meses, la batería 6. Si contesta 24, el retrieval trajo el chunk pero el modelo leyó mal.",
+    "tipo": "trampa",
+    "fuente": [
+      "03_garantias.txt"
+    ]
+  },
+  {
+    "question": "El service tardó 20 días hábiles en reparar mi producto. ¿Qué opciones tengo?",
+    "expect": [
+      [
+        "reemplazo"
+      ],
+      [
+        "reembolso"
+      ]
+    ],
+    "note": "GAR-007 §4. El límite es 15 días hábiles.",
+    "tipo": "razonamiento",
+    "fuente": [
+      "03_garantias.txt"
+    ]
+  },
+  {
+    "question": "¿Qué es un caso FR3?",
+    "expect": [
+      [
+        "tercera",
+        "tres",
+        "3"
+      ],
+      [
+        "recurrente"
+      ]
+    ],
+    "note": "GAR-007 §4. Código interno: sólo se puede saber desde el corpus.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "03_garantias.txt"
+    ]
+  },
+  {
+    "question": "¿Quién autoriza un reembolso de 150.000 pesos?",
+    "expect": [
+      [
+        "supervisor"
+      ]
+    ],
+    "note": "SOP-002 §4. El rango 25.001-200.000 es supervisor.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "04_soporte_sla.txt"
+    ]
+  },
+  {
+    "question": "Tengo un cobro duplicado de 500.000 pesos. ¿Necesito autorización de gerencia?",
+    "expect": [
+      [
+        "no"
+      ]
+    ],
+    "note": "FAC-009 §2 sobreescribe a SOP-002 §4. Requiere cruzar DOS documentos. El caso más difícil del set.",
+    "tipo": "cruce_documentos",
+    "fuente": [
+      "05_facturacion.txt",
+      "04_soporte_sla.txt"
+    ]
+  },
+  {
+    "question": "¿En cuánto tiempo me responden un ticket por paquete extraviado?",
+    "expect": [
+      [
+        "4",
+        "cuatro"
+      ]
+    ],
+    "note": "SOP-002 §2. Extraviado es P2 → primera respuesta en 4 horas.",
+    "tipo": "razonamiento",
+    "fuente": [
+      "04_soporte_sla.txt"
+    ]
+  },
+  {
+    "question": "Soy cliente preferente y devuelvo algo porque me arrepentí. ¿Pago el envío de retorno?",
+    "expect": [
+      [
+        "no"
+      ]
+    ],
+    "note": "SOP-002 §5 sobreescribe a DEV-004 §3. Segundo cruce de documentos.",
+    "tipo": "cruce_documentos",
+    "fuente": [
+      "04_soporte_sla.txt",
+      "01_devoluciones.txt"
+    ]
+  },
+  {
+    "question": "Inicié un contracargo con mi banco. ¿Nordix me reembolsa igual?",
+    "expect": [
+      [
+        "no"
+      ],
+      [
+        "congelada",
+        "suspende",
+        "suspendido"
+      ]
+    ],
+    "note": "FAC-009 §6.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "05_facturacion.txt"
+    ]
+  },
+  {
+    "question": "¿Cuántos intentos de entrega hace la transportista?",
+    "expect": [
+      [
+        "2",
+        "dos"
+      ]
+    ],
+    "note": "ENV-011 §4.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "02_envios.txt"
+    ]
+  },
+  {
+    "question": "¿Cuál es la política de teletrabajo de Nordix?",
+    "expect": [
+      [
+        "no",
+        "no tengo",
+        "no encuentro",
+        "no está",
+        "no figura"
+      ]
+    ],
+    "note": "NO está en el corpus. Debe negarse a contestar. Si inventa algo, el prompt de refusal falla — y eso no lo arregla el retrieval.",
+    "tipo": "debe_negarse",
+    "fuente": []
+  },
+  {
+    "question": "¿Nordix acepta pago en efectivo contra entrega?",
+    "expect": [
+      [
+        "no"
+      ]
+    ],
+    "note": "FAC-009 §1. Negativa que SÍ está en el corpus: distinta de la anterior.",
+    "tipo": "hecho_directo",
+    "fuente": [
+      "05_facturacion.txt"
+    ]
+  },
+  {
+    "question": "¿Cuánto cuesta la garantía extendida de 24 meses para un producto de 100.000 pesos?",
+    "expect": [
+      [
+        "16.000",
+        "16000",
+        "16"
+      ]
+    ],
+    "note": "GAR-007 §5. 8% por cada 12 meses → 16% por 24 meses. Requiere aritmética, no sólo retrieval.",
+    "tipo": "razonamiento",
+    "fuente": [
+      "03_garantias.txt"
+    ]
+  }
+]
