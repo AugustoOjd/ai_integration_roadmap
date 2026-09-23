@@ -1,0 +1,22 @@
+[project]
+name = "project-5-langchain-agents"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # create_agent, @tool, langchain.agents.middleware.
+    # [mcp] adds langchain.mcp.MCPAdapter (beta, needs >=1.4) and pulls in
+    # fastmcp, which the phase-4 server also uses. fastmcp depends on `mcp`,
+    # the official protocol SDK.
+    "langchain[mcp]>=1.4",
+    "langchain-anthropic",
+    # langchain already pulls it in, but we import from it directly
+    # (InMemorySaver), so it's declared: an import you use is a dependency you own.
+    "langgraph>=1.0",
+    "pydantic-settings>=2.15.0",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+]
+
+[tool.uv]
+# An application, not a library: uv installs deps, doesn't build/install `app`.
+package = false

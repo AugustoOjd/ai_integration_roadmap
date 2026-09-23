@@ -1,0 +1,25 @@
+services:
+  postgres:
+    # Plain Postgres: no vectors in this project, so no pgvector image.
+    image: postgres:17-alpine
+
+    environment:
+      POSTGRES_USER: nordix
+      POSTGRES_PASSWORD: nordix
+      POSTGRES_DB: nordix
+
+    ports:
+      # host:container. 5437 outside: 5432-5436 are taken by P1-P4.
+      - "5437:5432"
+
+    volumes:
+      - p5_pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nordix -d nordix"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  p5_pgdata:
